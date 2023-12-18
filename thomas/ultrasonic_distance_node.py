@@ -15,9 +15,10 @@ class UltrasonicDistancePublisher(Node):
     def timer_callback(self):
         ultrasonic_distance = bp.get_sensor(bp.PORT_2)
         msg = Range()
+        msg.header.stamp = self.get_clock().now().to_msg()
         msg.header.frame_id = "ultrasonic_distance_sensor"
         msg.radiation_type = 0  # ULTRASONIC TODO use constant to improve code style?
-        msg.field_of_view = 0.1  # need to check
+        msg.field_of_view = 0.05  # very approximate
         msg.min_range = 0.0
         msg.max_range = 1.0
         msg.range = ultrasonic_distance/100.0  # raw sensor is in cm's
