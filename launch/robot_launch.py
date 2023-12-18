@@ -5,11 +5,15 @@ def generate_launch_description():
     return LaunchDescription([
         Node(
             package='thomas',
+            executable='robot_node',
+        ),
+        Node(
+            package='thomas',
             executable='compass_node',
         ),
         Node(
             package='thomas',
-            executable='robot_node',
+            executable='ultrasonic_distance_node',
         ),
         Node(
             package='image_tools',
@@ -24,4 +28,3 @@ def generate_launch_description():
                 ('out/compressed', '/thomas/compressed')]
         ),
     ])
-

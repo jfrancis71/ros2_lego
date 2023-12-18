@@ -23,8 +23,9 @@ setup(
     tests_require=['pytest'],
     entry_points={
         'console_scripts': [
+            "robot_node = thomas.robot_node",
             "compass_node = thomas.compass_node",
-            "robot_node = thomas.robot_node"
+            "ultrasonic_distance_node = thomas.ultrasonic_distance_node"
         ],
     },
 )
