@@ -17,14 +17,16 @@ def generate_launch_description():
         ),
         Node(
             package='image_tools',
-            executable='cam2image'
+            executable='cam2image',
+            remappings=[
+                ('/image', '/thomas/image')]
         ),
         Node(
             package='image_transport',
             executable='republish',
             arguments=['raw', 'compressed'],
             remappings=[
-                ('in', '/image'),
+                ('in', '/thomas/image'),
                 ('out/compressed', '/thomas/compressed')]
         ),
     ])
