@@ -25,7 +25,8 @@ setup(
         'console_scripts': [
             "robot_node = thomas.robot_node",
             "compass_node = thomas.compass_node",
-            "ultrasonic_distance_node = thomas.ultrasonic_distance_node"
+            "ultrasonic_distance_node = thomas.ultrasonic_distance_node",
+            "object_detector_node = thomas.object_detector_node"
         ],
     },
 )
