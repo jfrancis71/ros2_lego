@@ -5,7 +5,7 @@ def generate_launch_description():
     return LaunchDescription([
         Node(
             package='lego',
-            executable='robot_node',
+            executable='thomas_node',
         ),
         Node(
             package='lego',
