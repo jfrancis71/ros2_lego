@@ -4,15 +4,15 @@ from launch_ros.actions import Node
 def generate_launch_description():
     return LaunchDescription([
         Node(
-            package='thomas',
+            package='lego',
             executable='robot_node',
         ),
         Node(
-            package='thomas',
+            package='lego',
             executable='compass_node',
         ),
         Node(
-            package='thomas',
+            package='lego',
             executable='ultrasonic_distance_node',
         ),
         Node(

@@ -12,11 +12,11 @@ def generate_launch_description():
                 ('out', '/image')]
         ),
         Node(
-            package='thomas',
+            package='lego',
             executable='object_detector_node'
         ),
         Node(
-            package='thomas',
+            package='lego',
             executable='person_follower_node'
         )
     ])

@@ -2,7 +2,7 @@ import os
 from glob import glob
 from setuptools import setup
 
-package_name = 'thomas'
+package_name = 'lego'
 
 setup(
     name=package_name,
@@ -23,11 +23,11 @@ setup(
     tests_require=['pytest'],
     entry_points={
         'console_scripts': [
-            "robot_node = thomas.robot_node",
-            "compass_node = thomas.compass_node",
-            "ultrasonic_distance_node = thomas.ultrasonic_distance_node",
-            "object_detector_node = thomas.object_detector_node",
-            "person_follower_node = thomas.person_follower_node"
+            "robot_node = lego.robot_node",
+            "compass_node = lego.compass_node",
+            "ultrasonic_distance_node = lego.ultrasonic_distance_node",
+            "object_detector_node = lego.object_detector_node",
+            "person_follower_node = lego.person_follower_node"
         ],
     },
 )
