@@ -23,7 +23,7 @@ setup(
     tests_require=['pytest'],
     entry_points={
         'console_scripts': [
-            "robot_node = lego.robot_node",
+            "thomas_node = lego.thomas_node",
             "compass_node = lego.compass_node",
             "ultrasonic_distance_node = lego.ultrasonic_distance_node",
             "object_detector_node = lego.object_detector_node",
