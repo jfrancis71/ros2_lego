@@ -1,5 +1,5 @@
-# thomas
-Thomas is a collection of ROS2 packages for a lego Technic robot (Thomas) running ROS2
+# lego
+Lego is a ROS2 package for a lego Technic robot (Thomas) running ROS2
 
 ```conda activate ros2```
 
@@ -9,9 +9,17 @@ Thomas is a collection of ROS2 packages for a lego Technic robot (Thomas) runnin
 
 ```source ./install/setup.bash```
 
-```ros2 launch thomas robot_launch.py```
+Run on the robot:
 
+```ros2 launch lego thomas_launch.py```
+
+
+Run on a controlling PC:
 
 To control by keyboard:
 
 ```ros2 run teleop_twist_keyboard teleop_twist_keyboard```
+
+To control by joystick:
+
+```ros2 launch teleop_twist_joy teleop-launch.py joy_config:='xbox'```
