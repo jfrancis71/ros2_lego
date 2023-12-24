@@ -12,8 +12,6 @@ class PersonFollowerNode(Node):
             Detection2DArray,
             'detected_objects',
             self.listener_callback, 0)
-        twist = Twist()
-        twist.linear.x = .5
 
     def listener_callback(self, msg):
         detection_array = msg.detections
@@ -22,11 +20,11 @@ class PersonFollowerNode(Node):
             if detection.results[0].hypothesis.class_id == "person":
                 x = detection.bbox.center.position.x
                 size = detection.bbox.size_x
+        twist = Twist()
         if x is not None:
-            twist = Twist()
             twist.linear.x = -(size-100)/75
             twist.angular.z = -(x-160)/100
-            self.publisher.publish(twist)
+        self.publisher.publish(twist)
 
 
 rclpy.init()
