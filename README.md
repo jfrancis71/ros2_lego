@@ -1,6 +1,23 @@
 # lego
 Lego is a ROS2 package for a lego Technic robot (Thomas) running ROS2
 
+## Components
+
+### Robot:
+
+Raspberry Pi 3 Model B+, Dexter Industries BrickPi3, EV3 Motors, Microsoft LifeCam HD-3000, Lego Technics parts
+
+Ubuntu 22.04, ROS2 Humble (RoboStack), BrickPi3
+
+### Server:
+
+Dell
+Ubuntu 18.04, ROS2 Humble (RoboStack), Pytorch (for object dection)
+
+
+
+## Setup
+
 ```conda activate ros2```
 
 ```cd ros2_ws```
