@@ -6,7 +6,7 @@ from std_msgs.msg import String
 from geometry_msgs.msg import Twist
 
 
-class ThomasNode(Node):
+class CharlieNode(Node):
     def __init__(self):
         super().__init__('thomas_the_robot')
         self.subscription = self.create_subscription(
@@ -41,8 +41,8 @@ class ThomasNode(Node):
         self.bp.set_motor_power(self.bp.PORT_D, 0)
 
 rclpy.init()
-motor_subscriber = ThomasNode()
-rclpy.spin(motor_subscriber)
-motor_subscriber.off()
-motor_subscriber.destroy_node()
+charlie_node = CharlieNode()
+rclpy.spin(charlie_node)
+charlie_node.off()
+charlie_node.destroy_node()
 rclpy.shutdown()
