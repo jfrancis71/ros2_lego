@@ -5,7 +5,7 @@ def generate_launch_description():
     return LaunchDescription([
         Node(
             package='lego',
-            executable='thomas_node',
+            executable='charlie_node',
         ),
         Node(
             package='lego',
@@ -14,19 +14,20 @@ def generate_launch_description():
         Node(
             package='lego',
             executable='ultrasonic_distance_node',
+            parameters=[{"lego_port": "PORT_2"}]
         ),
         Node(
             package='image_tools',
             executable='cam2image',
             remappings=[
-                ('/image', '/thomas/image')]
+                ('/image', '/charlie/image')]
         ),
         Node(
             package='image_transport',
             executable='republish',
             arguments=['raw', 'compressed'],
             remappings=[
-                ('in', '/thomas/image'),
-                ('out/compressed', '/thomas/compressed')]
+                ('in', '/charlie/image'),
+                ('out/compressed', '/charlie/compressed')]
         ),
     ])
