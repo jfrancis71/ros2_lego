@@ -1,5 +1,5 @@
-# lego
-Lego is a ROS2 package for a lego Technic robot (Charlie) running ROS2
+# Lego
+Lego is a ROS2 package for a lego Technic robot (Charlie) running ROS2 Humble from RoboStack (Conda installation)
 
 ![Charlie](https://drive.google.com/uc?id=1GdqDXQZsIsTLFUqVw2gdJ1S9lr9-x4DP&export=download)
 
@@ -17,7 +17,16 @@ Dell Precision Tower 5810 (48 GB RAM), Nvidia RTX 2070
 
 Ubuntu 18.04, ROS2 Humble (RoboStack), Pytorch 2.1.1 (for object detection)
 
+## Installation
 
+Follow the RoboStack installation instructions to install ROS2:
+
+[Robostack](https://robostack.github.io/GettingStarted.html)
+
+The object detector and person follower requires PyTorch:
+Follow the PyTorch installation instructions with the Conda install:
+
+[PyTorch](https://pytorch.org/get-started/locally/)
 
 ## Setup
 
