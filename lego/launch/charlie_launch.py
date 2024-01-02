@@ -14,6 +14,7 @@ def generate_launch_description():
         Node(
             package='lego',
             executable='ultrasonic_distance_node',
+            parameters=[{"lego_port": "PORT_2"}]
         ),
         Node(
             package='image_tools',
