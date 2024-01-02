@@ -51,6 +51,7 @@ Follow the PyTorch installation instructions with the Conda install:
 ## Setup
 
 ```cd ros2_ws```
+
 ```source ./install/setup.bash```
 
 Run on the robot:
