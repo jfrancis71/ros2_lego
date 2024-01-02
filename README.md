@@ -1,7 +1,7 @@
 # lego
-Lego is a ROS2 package for a lego Technic robot (Thomas) running ROS2
+Lego is a ROS2 package for a lego Technic robot (Charlie) running ROS2
 
-![Henry2](https://drive.google.com/uc?id=1GdqDXQZsIsTLFUqVw2gdJ1S9lr9-x4DP&export=download)
+![Charlie](https://drive.google.com/uc?id=1GdqDXQZsIsTLFUqVw2gdJ1S9lr9-x4DP&export=download)
 
 ## Components
 
@@ -31,7 +31,7 @@ Ubuntu 18.04, ROS2 Humble (RoboStack), Pytorch 2.1.1 (for object dection)
 
 Run on the robot:
 
-```ros2 launch lego thomas_launch.py```
+```ros2 launch lego charlie_launch.py```
 
 
 Run on a controlling PC:
