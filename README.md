@@ -15,7 +15,7 @@ Ubuntu 22.04, ROS2 Humble (RoboStack), BrickPi3
 
 Dell Precision Tower 5810 (48 GB RAM), Nvidia RTX 2070
 
-Ubuntu 18.04, ROS2 Humble (RoboStack), Pytorch 2.1.1 (for object dection)
+Ubuntu 18.04, ROS2 Humble (RoboStack), Pytorch 2.1.1 (for object detection)
 
 
 
