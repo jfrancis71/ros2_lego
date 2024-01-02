@@ -11,6 +11,9 @@ Raspberry Pi 3 Model B+, Dexter Industries BrickPi3, EV3 Motors, HiTechnic NXT C
 
 Ubuntu 22.04, ROS2 Humble (RoboStack), BrickPi3
 
+To build [Charlie](Charlie.md)
+
+
 ### Server:
 
 Dell Precision Tower 5810 (48 GB RAM), Nvidia RTX 2070
@@ -38,14 +41,7 @@ Follow the RoboStack installation instructions to install ROS2:
 ```colcon build --symlink-install```
 
 
-
-### Robot Installation
-
-[Charlie](Charlie.md)
-
-### Server Installation
-
-The object detector and person follower requires PyTorch:
+The object detector and person follower requires PyTorch (on the server).
 Follow the PyTorch installation instructions with the Conda install:
 
 [PyTorch](https://pytorch.org/get-started/locally/)
