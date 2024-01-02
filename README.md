@@ -19,23 +19,42 @@ Ubuntu 18.04, ROS2 Humble (RoboStack), Pytorch 2.1.1 (for object detection)
 
 ## Installation
 
+For both robot and server:
+
 Follow the RoboStack installation instructions to install ROS2:
 
-[Robostack](https://robostack.github.io/GettingStarted.html)
+[RoboStack](https://robostack.github.io/GettingStarted.html)
+
+```conda activate ros2```
+
+```mkdir -p ros2_ws/src```
+
+```cd ros2_ws/src```
+
+```git clone https://github.com/jfrancis71/ros2_lego.git```
+
+```cd ..```
+
+```colcon build --symlink-install```
+
+
+
+### Robot Installation
+
+[Charlie](Charlie.md)
+
+### Server Installation
 
 The object detector and person follower requires PyTorch:
 Follow the PyTorch installation instructions with the Conda install:
 
 [PyTorch](https://pytorch.org/get-started/locally/)
 
+
+
 ## Setup
 
-```conda activate ros2```
-
 ```cd ros2_ws```
-
-```colcon build --symlink-install```
-
 ```source ./install/setup.bash```
 
 Run on the robot:
