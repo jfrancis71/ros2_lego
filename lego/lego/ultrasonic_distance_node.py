@@ -16,19 +16,31 @@ class UltrasonicDistanceNode(Node):
               "PORT_2": self.bp.PORT_2,
               "PORT_3": self.bp.PORT_3,
               "PORT_4": self.bp.PORT_4 }
-        lego_port_name = self.get_parameter('lego_port').get_parameter_value().string_value
-        self.lego_port = port_dict[lego_port_name]
-        self.bp.set_sensor_type(self.lego_port, self.bp.SENSOR_TYPE.EV3_ULTRASONIC_CM)
+        self.lego_port_name = self.get_parameter('lego_port').get_parameter_value().string_value
+        try:
+            self.lego_port = port_dict[self.lego_port_name]
+        except KeyError as e:
+            error_msg = f'Unknown lego input port: {e}'
+            self.get_logger().error(error_msg)
+            raise IOError(error_msg) from e
+        self.lego_port = port_dict[self.lego_port_name]
+        # we disable pylint warning as BrickPi does some strange attribute manipulation
+        self.bp.set_sensor_type(self.lego_port, self.bp.SENSOR_TYPE.EV3_ULTRASONIC_CM)  # pylint: disable=E1101
         timer_period = 0.5
         self.timer = self.create_timer(timer_period, self.timer_callback)
 
     def timer_callback(self):
         """Reads ultrasonic distance and publishes Range message on topic ultrasonic_distance"""
-        ultrasonic_distance = self.bp.get_sensor(self.lego_port)
+        try:
+            ultrasonic_distance = self.bp.get_sensor(self.lego_port)
+        except brickpi3.SensorError as e:
+            error_msg = f'Invalid ultrasonic distance sensor data on {self.lego_port_name}'
+            self.get_logger().error(error_msg)
+            raise brickpi3.SensorError(error_msg) from e
         msg = Range()
         msg.header.stamp = self.get_clock().now().to_msg()
         msg.header.frame_id = "ultrasonic_distance_sensor"
-        msg.radiation_type = 0  # ULTRASONIC TODO use constant to improve code style?
+        msg.radiation_type = Range.ULTRASOUND
         msg.field_of_view = 0.05  # very approximate
         msg.min_range = 0.0
         msg.max_range = 1.0
