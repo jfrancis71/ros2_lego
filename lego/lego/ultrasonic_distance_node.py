@@ -21,7 +21,7 @@ class UltrasonicDistanceNode(Node):
             self.lego_port = port_dict[self.lego_port_name]
         except KeyError as e:
             error_msg = f'Unknown lego input port: {e}'
-            self.get_logger().error(error_msg)
+            self.get_logger().fatal(error_msg)
             raise IOError(error_msg) from e
         self.lego_port = port_dict[self.lego_port_name]
         # we disable pylint warning as BrickPi does some strange attribute manipulation

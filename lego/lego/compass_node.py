@@ -22,7 +22,7 @@ class CompassNode(Node):
             self.lego_port = port_dict[self.lego_port_name]
         except KeyError as e:
             error_msg = f'Unknown lego input port: {e}'
-            self.get_logger().error(error_msg)
+            self.get_logger().fatal(error_msg)
             raise IOError(error_msg) from e
         # Ref 1, also we disable pylint warning as BrickPi does some strange attribute manipulation
         self.bp.set_sensor_type(self.lego_port, self.bp.SENSOR_TYPE.I2C, [0,20]) # pylint: disable=E1101
