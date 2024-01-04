@@ -8,7 +8,7 @@ def generate_launch_description():
             executable='republish',
             arguments=['compressed', 'raw'],
             remappings=[
-                ('in/compressed', '/thomas/compressed'),
+                ('in/compressed', '/charlie/compressed'),
                 ('out', '/image')]
         ),
         Node(
