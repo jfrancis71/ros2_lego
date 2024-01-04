@@ -31,8 +31,8 @@ class PersonFollowerNode(Node):
                 size = detection.bbox.size_x
         twist = Twist()
         if x is not None:
-            twist.linear.x = -(size-100)/75
-            twist.angular.z = -(x-160)/100
+            twist.linear.x = -(size-100)/750
+            twist.angular.z = -(x-160)/300
         self.publisher.publish(twist)
 
 
