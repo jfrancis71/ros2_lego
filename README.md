@@ -22,37 +22,60 @@ Ubuntu 18.04, ROS2 Humble (RoboStack), Pytorch 2.1.1 (for object detection)
 
 ## Installation
 
-For both robot and server:
+### Robot
 
-Follow the RoboStack installation instructions to install ROS2:
+Follow the [RoboStack](https://robostack.github.io/GettingStarted.html) installation instructions to install ROS2
 
-[RoboStack](https://robostack.github.io/GettingStarted.html)
+(Ensure you have also followed the step Installation tools for local development in the above instructions)
 
-```conda activate ros2```
 
-```mkdir -p ros2_ws/src```
+```
+conda activate ros2 (use whatever name here you decided to call this conda environment)
+mamba install ros-humble-compressed-image-transport
+git clone https://github.com/DexterInd/BrickPi3.git
+cd BrickPi3/Software/Python/
+pip install .
+cd ~
+mkdir -p ros2_ws/src
+cd ros2_ws/src
+git clone https://github.com/jfrancis71/ros2_lego.git
+cd ..
+colcon build --symlink-install
+```
 
-```cd ros2_ws/src```
+### Server
 
-```git clone https://github.com/jfrancis71/ros2_lego.git```
+Follow the [RoboStack](https://robostack.github.io/GettingStarted.html) installation instructions to install ROS2
 
-```cd ..```
+(Ensure you have also followed the step Installation tools for local development in the above instructions)
 
-```colcon build --symlink-install```
+
+```
+conda activate ros2 (use whatever name here you decided to call this conda environment)
+mamba install ros-humble-compressed-image-transport
+mamba install ros-humble-vision-msgs
+mkdir -p ros2_ws/src
+cd ros2_ws/src
+git clone https://github.com/jfrancis71/ros2_lego.git
+cd ..
+colcon build --symlink-install
+```
 
 
 The object detector and person follower requires PyTorch (on the server).
-Follow the PyTorch installation instructions with the Conda install:
-
-[PyTorch](https://pytorch.org/get-started/locally/)
+Follow the [PyTorch](https://pytorch.org/get-started/locally/) installation instructions with the Conda install
 
 
 
-## Setup
 
-```cd ros2_ws```
+## Setup Environment
 
-```source ./install/setup.bash```
+Execute on both robot and server:
+```
+conda activate ros2 (use whatever name here you decided to call this conda environment)
+cd ros2_ws
+source ./install/setup.bash
+```
 
 Run on the robot:
 
