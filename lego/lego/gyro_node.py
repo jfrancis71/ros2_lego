@@ -1,16 +1,17 @@
-"""Ultrasonic Distance Sensor Node"""
+"""Gyro Sensor Node"""
+import math
 import brickpi3
 import rclpy
 from rclpy.node import Node
-from sensor_msgs.msg import Range
+from std_msgs.msg import Float64
 
 
-class UltrasonicDistanceNode(Node):
-    """Publishes Range message on topic ultrasonic_distance"""
+class GyroNode(Node):
+    """Publishes Float64 message on /gyro_angular_velocity"""
     def __init__(self):
-        super().__init__("ultrasonic_distance_node")
+        super().__init__("gyro_node")
         self.bp = brickpi3.BrickPi3()
-        self.publisher = self.create_publisher(Range, "ultrasonic_distance", 10)
+        self.publisher = self.create_publisher(Float64, "gyro_angular_velocity", 10)
         self.declare_parameter('lego_port', 'PORT_1')
         port_dict = { "PORT_1": self.bp.PORT_1,
               "PORT_2": self.bp.PORT_2,
@@ -25,34 +26,27 @@ class UltrasonicDistanceNode(Node):
             raise IOError(error_msg) from e
         self.lego_port = port_dict[self.lego_port_name]
         # we disable pylint warning as BrickPi does some strange attribute manipulation
-        self.bp.set_sensor_type(self.lego_port, self.bp.SENSOR_TYPE.EV3_ULTRASONIC_CM)  # pylint: disable=E1101
+        self.bp.set_sensor_type(self.lego_port, self.bp.SENSOR_TYPE.EV3_GYRO_ABS_DPS)  # pylint: disable=E1101
         self.declare_parameter('frequency', 2.0)
         timer_period = 1.0/self.get_parameter('frequency').get_parameter_value().double_value
-
         self.timer = self.create_timer(timer_period, self.timer_callback)
 
     def timer_callback(self):
-        """Reads ultrasonic distance and publishes Range message on topic ultrasonic_distance"""
+        """Reads gyro angular velocity and publishes on /gyro_angular_velocity"""
         try:
-            ultrasonic_distance = self.bp.get_sensor(self.lego_port)
+            _, gyro_angular_velocity = self.bp.get_sensor(self.lego_port)
         except brickpi3.SensorError as e:
-            error_msg = f'Invalid ultrasonic distance sensor data on {self.lego_port_name}'
+            error_msg = f'Invalid gyro sensor data on {self.lego_port_name}'
             self.get_logger().error(error_msg)
             raise brickpi3.SensorError(error_msg) from e
-        msg = Range()
-        msg.header.stamp = self.get_clock().now().to_msg()
-        msg.header.frame_id = "ultrasonic_distance_sensor"
-        msg.radiation_type = Range.ULTRASOUND
-        msg.field_of_view = 0.05  # very approximate
-        msg.min_range = 0.0
-        msg.max_range = 1.0
-        msg.range = ultrasonic_distance/100.0  # raw sensor is in cm's
+        msg = Float64()
+        msg.data = gyro_angular_velocity*(2*math.pi/360)
         self.publisher.publish(msg)
-        self.get_logger().info(f'Publishing: {msg.range}')
+        self.get_logger().info(f'Publishing: {msg.data}')
 
 
 rclpy.init()
-ultrasonic_distance_node = UltrasonicDistanceNode()
-rclpy.spin(ultrasonic_distance_node)
-ultrasonic_distance_node.destroy_node()
+gyro_node = GyroNode()
+rclpy.spin(gyro_node)
+gyro_node.destroy_node()
 rclpy.shutdown()
