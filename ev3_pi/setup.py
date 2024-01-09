@@ -2,7 +2,7 @@ import os
 from glob import glob
 from setuptools import setup
 
-package_name = 'lego'
+package_name = 'ev3_pi'
 
 setup(
     name=package_name,
@@ -23,11 +23,11 @@ setup(
     tests_require=['pytest'],
     entry_points={
         'console_scripts': [
-            "charlie_node = lego.charlie_node",
-            "compass_node = lego.compass_node",
-            "ultrasonic_distance_node = lego.ultrasonic_distance_node",
-            "object_detector_node = lego.object_detector_node",
-            "person_follower_node = lego.person_follower_node"
+            "charlie_node = ev3_pi.charlie_node",
+            "compass_node = ev3_pi.compass_node",
+            "ultrasonic_distance_node = ev3_pi.ultrasonic_distance_node",
+            "object_detector_node = ev3_pi.object_detector_node",
+            "person_follower_node = ev3_pi.person_follower_node"
         ],
     },
 )

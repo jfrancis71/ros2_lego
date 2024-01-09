@@ -4,15 +4,15 @@ from launch_ros.actions import Node
 def generate_launch_description():
     return LaunchDescription([
         Node(
-            package='lego',
-            executable='charlie_node',
+            package='ev3_pi',
+            executable='differential_drive_node',
         ),
         Node(
-            package='lego',
+            package='ev3_pi',
             executable='compass_node',
         ),
         Node(
-            package='lego',
+            package='ev3_pi',
             executable='ultrasonic_distance_node',
             parameters=[{"lego_port": "PORT_2"}]
         ),
