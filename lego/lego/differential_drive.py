@@ -9,18 +9,39 @@ from sensor_msgs.msg import JointState
 
 class CharlieNode(Node):
     """CharlieNode listens to Twist messages and drives Charlie the robot"""
+    # pylint: disable=R0902 disable too many instance variables warning for this class
     def __init__(self):
         super().__init__('charlie_the_robot')
         self.bp = brickpi3.BrickPi3()
         self.off()
+        self.declare_parameter('wheel_radius', 0.02)
+        self.wheel_radius = self.get_parameter('wheel_radius').get_parameter_value().double_value
+        self.declare_parameter('wheel_separation', 0.132)
+        self.turning_circle_radius = self.get_parameter('wheel_separation'). \
+            get_parameter_value().double_value/2.0
+        self.declare_parameter('left_wheel_lego_port', 'PORT_A')
+        self.declare_parameter('right_wheel_lego_port', 'PORT_D')
+        port_dict = { "PORT_A": self.bp.PORT_A,
+                      "PORT_B": self.bp.PORT_B,
+                      "PORT_C": self.bp.PORT_C,
+                      "PORT_D": self.bp.PORT_D }
+        self.left_wheel_lego_port_name = self.get_parameter('left_wheel_lego_port'). \
+            get_parameter_value().string_value
+        self.right_wheel_lego_port_name = self.get_parameter('right_wheel_lego_port'). \
+            get_parameter_value().string_value
+        try:
+            self.left_wheel_lego_port = port_dict[self.left_wheel_lego_port_name]
+            self.right_wheel_lego_port = port_dict[self.right_wheel_lego_port_name]
+        except KeyError as e:
+            error_msg = f'Unknown lego input port: {e}'
+            self.get_logger().fatal(error_msg)
+            raise IOError(error_msg) from e
         self.subscription = self.create_subscription(
             Twist,
             'cmd_vel',
             self.listener_callback, 0)
         self.publisher = self.create_publisher(JointState, "/joint_states", 10)
-        self.wheel_radius = 0.02
-        self.turning_circle_radius = 0.132/2.0
-        self.declare_parameter('_publish_rate', 5.0)
+        self.declare_parameter('publish_rate', 5.0)
         joint_states_timer_period = \
             1.0/self.get_parameter('publish_rate'). \
             get_parameter_value().double_value
