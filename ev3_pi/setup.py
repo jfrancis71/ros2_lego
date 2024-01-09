@@ -23,7 +23,7 @@ setup(
     tests_require=['pytest'],
     entry_points={
         'console_scripts': [
-            "charlie_node = ev3_pi.charlie_node",
+            "differential_drive_node = ev3_pi.differential_drive_node",
             "compass_node = ev3_pi.compass_node",
             "ultrasonic_distance_node = ev3_pi.ultrasonic_distance_node",
             "object_detector_node = ev3_pi.object_detector_node",
