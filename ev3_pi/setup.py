@@ -26,7 +26,6 @@ setup(
             "differential_drive_node = ev3_pi.differential_drive_node",
             "compass_node = ev3_pi.compass_node",
             "ultrasonic_distance_node = ev3_pi.ultrasonic_distance_node",
-            "object_detector_node = ev3_pi.object_detector_node",
             "person_follower_node = ev3_pi.person_follower_node"
         ],
     },
