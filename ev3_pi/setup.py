@@ -23,10 +23,14 @@ setup(
     tests_require=['pytest'],
     entry_points={
         'console_scripts': [
-            "differential_drive_node = ev3_pi.differential_drive_node",
+            "battery_node = ev3_pi.battery_node",
+            "color_sensor_node = ev3_pi.color_sensor_node",
             "compass_node = ev3_pi.compass_node",
+            "differential_drive_node = ev3_pi.differential_drive_node",
+            "gyro_node = ev3_pi.gyro_node",
+            "infrared_distance_node = ev3_pi.infrared_distance_node",
+            "touch_sensor_node = ev3_pi.touch_sensor_node",
             "ultrasonic_distance_node = ev3_pi.ultrasonic_distance_node",
-            "person_follower_node = ev3_pi.person_follower_node"
         ],
     },
 )
