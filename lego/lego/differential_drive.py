@@ -20,9 +20,9 @@ class CharlieNode(Node):
         self.publisher = self.create_publisher(JointState, "/joint_states", 10)
         self.wheel_radius = 0.02
         self.turning_circle_radius = 0.132/2.0
-        self.declare_parameter('joint_states_publish_frequency', 5.0)
+        self.declare_parameter('_publish_rate', 5.0)
         joint_states_timer_period = \
-            1.0/self.get_parameter('joint_states_publish_frequency'). \
+            1.0/self.get_parameter('publish_rate'). \
             get_parameter_value().double_value
         self.joint_states_times = \
             self.create_timer(joint_states_timer_period, self.joint_states_callback)
