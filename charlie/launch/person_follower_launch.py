@@ -13,10 +13,10 @@ def generate_launch_description():
         ),
         Node(
             package='coco_detector',
-            executable='object_detector_node'
+            executable='coco_detector_node'
         ),
         Node(
-            package='ev3_pi',
+            package='charlie',
             executable='person_follower_node'
         )
     ])
