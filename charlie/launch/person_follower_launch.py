@@ -12,7 +12,7 @@ def generate_launch_description():
                 ('out', '/image')]
         ),
         Node(
-            package='ev3_pi',
+            package='coco_detector',
             executable='object_detector_node'
         ),
         Node(
