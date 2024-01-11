@@ -79,7 +79,7 @@ source ./install/setup.bash
 
 Run on the robot:
 
-```ros2 launch charlie charlie_launch.py```
+```ros2 launch charlie robot_launch.py```
 
 
 ## Useful Commands
