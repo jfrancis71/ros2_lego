@@ -63,7 +63,7 @@ colcon build --symlink-install
 
 
 The object detector and person follower requires PyTorch (on the server).
-Follow the [PyTorch](https://pytorch.org/get-started/locally/) installation instructions with the Conda install
+Follow the [PyTorch](https://pytorch.org/get-started/locally/) installation instructions with the Conda install (but replace the conda command with mamba)
 
 
 
