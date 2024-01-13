@@ -8,8 +8,8 @@
 import brickpi3
 import rclpy
 from rclpy.node import Node
-from std_msgs.msg import UInt8
-from std_msgs.msg import String
+from ev3_sensor_msgs.msg import Color
+from sensor_msgs.msg import Illuminance
 
 
 class ColorSensorNode(Node):
@@ -34,10 +34,10 @@ class ColorSensorNode(Node):
             self.get_parameter('detection_mode').get_parameter_value().string_value
         if self.detection_mode == "COLOR":
             self.bp.set_sensor_type(self.lego_port, self.bp.SENSOR_TYPE.EV3_COLOR_COLOR)  # pylint: disable=E1101
-            self.publisher = self.create_publisher(String, "color", 10)
+            self.publisher = self.create_publisher(Color, "color", 10)
         else:
             if self.detection_mode in ( "REFLECTED", "AMBIENT"):
-                self.publisher = self.create_publisher(UInt8, "light_intensity", 10)
+                self.publisher = self.create_publisher(Illuminance, "light_intensity", 10)
                 if self.detection_mode == "REFLECTED":
                     self.bp.set_sensor_type(self.lego_port, self.bp.SENSOR_TYPE.EV3_COLOR_REFLECTED)  # pylint: disable=E1101
                 else:
@@ -60,17 +60,19 @@ class ColorSensorNode(Node):
             self.get_logger().error(error_msg)
             raise brickpi3.SensorError(error_msg) from e
         if self.detection_mode == "COLOR":
-            msg = String()
+            msg = Color()
             if value > len(self.colormap):
                 error_msg = f'Invalid color returned from {self.lego_port_name}'
                 self.get_logger().error(error_msg)
                 raise brickpi3.SensorError(error_msg)
-            msg.data = self.colormap[value]
+            msg.color = self.colormap[value]
         else:
-            msg = UInt8()
-            msg.data = value
+            msg = Illuminance()
+            msg.illuminance = value/100.0
+        msg.header.stamp = self.get_clock().now().to_msg()
+        msg.header.frame_id = "color_sensor"
         self.publisher.publish(msg)
-        self.get_logger().info(f'Publishing: {msg.data}')
+        self.get_logger().info(f'Publishing: {msg}')
 
 
 rclpy.init()

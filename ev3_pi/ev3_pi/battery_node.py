@@ -20,7 +20,7 @@ class BatteryNode(Node):
         battery_voltage = self.bp.get_voltage_battery()
         msg = BatteryState()
         msg.header.stamp = self.get_clock().now().to_msg()
-        msg.header.frame_id = ""
+        msg.header.frame_id = "battery_sensor"
         msg.voltage = battery_voltage
         self.publisher.publish(msg)
         self.get_logger().info(f'Publishing: {msg.voltage}')

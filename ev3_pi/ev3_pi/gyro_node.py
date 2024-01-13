@@ -1,17 +1,18 @@
-"""Gyro Sensor Node"""
+"""Gyro Sensor Node publishes Imu message on /gyro, angular_velocity only"""
 import math
+from scipy.spatial.transform import Rotation as R
 import brickpi3
 import rclpy
 from rclpy.node import Node
-from std_msgs.msg import Float64
+from sensor_msgs.msg import Imu
 
 
 class GyroNode(Node):
-    """Publishes Float64 message on /gyro_angular_velocity"""
+    """Publishes Imu message on /gyro"""
     def __init__(self):
         super().__init__("gyro_node")
         self.bp = brickpi3.BrickPi3()
-        self.publisher = self.create_publisher(Float64, "gyro_angular_velocity", 10)
+        self.publisher = self.create_publisher(Imu, "gyro", 10)
         self.declare_parameter('lego_port', 'PORT_1')
         port_dict = { "PORT_1": self.bp.PORT_1,
               "PORT_2": self.bp.PORT_2,
@@ -32,17 +33,21 @@ class GyroNode(Node):
         self.timer = self.create_timer(timer_period, self.timer_callback)
 
     def timer_callback(self):
-        """Reads gyro angular velocity and publishes on /gyro_angular_velocity"""
+        """Reads gyro angular velocity and publishes on /gyro"""
         try:
-            _, gyro_angular_velocity = self.bp.get_sensor(self.lego_port)
+            gyro_angular_position, gyro_angular_velocity = self.bp.get_sensor(self.lego_port)
         except brickpi3.SensorError as e:
             error_msg = f'Invalid gyro sensor data on {self.lego_port_name}'
             self.get_logger().error(error_msg)
             raise brickpi3.SensorError(error_msg) from e
-        msg = Float64()
-        msg.data = gyro_angular_velocity*(2*math.pi/360)
+        msg = Imu()
+        msg.header.stamp = self.get_clock().now().to_msg()
+        msg.header.frame_id = "gyro_sensor"
+        gyro_angular_position_rad = gyro_angular_position*2.0*math.pi/360.0
+        quaternion = R.from_euler('xyz',[0.0, 0.0, -gyro_angular_position_rad]).as_quat()
+        msg.angular_velocity.z = gyro_angular_velocity*2.0*math.pi/360.0
         self.publisher.publish(msg)
-        self.get_logger().info(f'Publishing: {msg.data}')
+        self.get_logger().info(f'Publishing: {msg}')
 
 
 rclpy.init()

@@ -32,6 +32,7 @@ Follow the [RoboStack](https://robostack.github.io/GettingStarted.html) installa
 ```
 conda activate ros2 (use whatever name here you decided to call this conda environment)
 mamba install ros-humble-compressed-image-transport
+mamba install scipy
 git clone https://github.com/DexterInd/BrickPi3.git
 cd BrickPi3/Software/Python/
 pip install .

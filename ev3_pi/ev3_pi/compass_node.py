@@ -1,17 +1,19 @@
 """CompassNode publishes message UInt16 on topic compass_bearing"""
 import time
+import math
+from scipy.spatial.transform import Rotation as R
 import brickpi3
 import rclpy
 from rclpy.node import Node
-from std_msgs.msg import UInt16
+from geometry_msgs.msg import QuaternionStamped
 
 
 class CompassNode(Node):
-    """CompassNode publishes message UInt16 on topic compass_bearing"""
+    """CompassNode publishes message QuaternionStamped on topic compass_bearing"""
     def __init__(self):
         super().__init__("compass_node")
         self.bp = brickpi3.BrickPi3()
-        self.publisher = self.create_publisher(UInt16, "compass_bearing", 10)
+        self.publisher = self.create_publisher(QuaternionStamped, "compass_bearing", 10)
         self.declare_parameter('lego_port', 'PORT_1')
         port_dict = { "PORT_1": self.bp.PORT_1,
                       "PORT_2": self.bp.PORT_2,
@@ -41,10 +43,16 @@ class CompassNode(Node):
             self.get_logger().error(error_msg)
             raise brickpi3.SensorError(error_msg) from e
         compass_bearing = value[0]*2 + value[1]
-        msg = UInt16()
-        msg.data = compass_bearing
+        compass_bearing_rad = compass_bearing*2.0*math.pi/360.0
+        quaternion = R.from_euler('xyz',[0, 0, -compass_bearing_rad]).as_quat()
+        msg = QuaternionStamped()
+        msg.header.stamp = self.get_clock().now().to_msg()
+        msg.header.frame_id = "compass_sensor"
+        q = msg.quaternion
+        q.x, q.y, q.z, q.w = quaternion
+#        q.w, q.x, q.y, q.z = orientation
         self.publisher.publish(msg)
-        self.get_logger().info(f'Publishing: {msg.data}')
+        self.get_logger().info(f'Publishing: {q}')
 
 
 rclpy.init()

@@ -42,7 +42,7 @@ class InfraredDistanceNode(Node):
         msg.header.stamp = self.get_clock().now().to_msg()
         msg.header.frame_id = "infrared_distance_sensor"
         msg.radiation_type = Range.INFRARED
-        msg.field_of_view = 0.05  # very approximate
+        msg.field_of_view = 0.1  # very approximate
         msg.min_range = 0.0
         msg.max_range = 1.0
         msg.range = infrared_distance/100.0  # raw sensor is in cm's
