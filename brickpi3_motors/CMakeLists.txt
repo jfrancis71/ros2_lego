@@ -5,6 +5,12 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "(GNU|Clang)")
   add_compile_options(-Wall -Wextra)
 endif()
 
+if(NOT DEFINED ENV{BRICKPI3_ROOT_DIR})
+	message(FATAL_ERROR "You must set BRICKPI3_ROOT_DIR")
+endif()
+
+include_directories("$ENV{BRICKPI3_ROOT_DIR}/Software/C")
+
 # find dependencies
 set(THIS_PACKAGE_INCLUDE_DEPENDS
   hardware_interface

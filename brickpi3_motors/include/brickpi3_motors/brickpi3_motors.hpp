@@ -60,6 +60,7 @@ private:
   std::vector<double> hw_commands_;
   std::vector<double> hw_positions_;
   std::vector<double> hw_velocities_;
+  std::vector<int> hw_lego_ports_;
 };
 
 }  // namespace brickpi3_motors

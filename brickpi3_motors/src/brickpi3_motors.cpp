@@ -6,9 +6,22 @@
 #include <limits>
 #include <memory>
 #include <vector>
+#include <map>
 
 #include "hardware_interface/types/hardware_interface_type_values.hpp"
 #include "rclcpp/rclcpp.hpp"
+
+#include "BrickPi3.cpp"
+
+
+BrickPi3 brickpi3;
+std::map<std::string, int> lego_port_map = {
+  {"PORT_A", PORT_A}, {"PORT_B", PORT_B},
+  {"PORT_C", PORT_C}, {"PORT_D", PORT_D}};
+
+
+const double MATH_PI = 3.141592653589793;
+
 
 namespace brickpi3_motors
 {
@@ -29,6 +42,7 @@ hardware_interface::CallbackReturn BrickPi3MotorsHardware::on_init(
   hw_positions_.resize(info_.joints.size(), std::numeric_limits<double>::quiet_NaN());
   hw_velocities_.resize(info_.joints.size(), std::numeric_limits<double>::quiet_NaN());
   hw_commands_.resize(info_.joints.size(), std::numeric_limits<double>::quiet_NaN());
+  hw_lego_ports_.resize(info_.joints.size(), std::numeric_limits<double>::quiet_NaN());
 
   for (const hardware_interface::ComponentInfo & joint : info_.joints)
   {
@@ -75,6 +89,22 @@ hardware_interface::CallbackReturn BrickPi3MotorsHardware::on_init(
         rclcpp::get_logger("DiffBotSystemHardware"),
         "Joint '%s' have '%s' as second state interface. '%s' expected.", joint.name.c_str(),
         joint.state_interfaces[1].name.c_str(), hardware_interface::HW_IF_VELOCITY);
+      return hardware_interface::CallbackReturn::ERROR;
+    }
+
+  }
+
+  // Map the hardware command interface onto lego port numbers
+  for (auto i = 0u; i < info.joints.size(); i++)
+  {
+    std::map<std::string, int>::iterator pos = lego_port_map.find(info.joints[i].name);
+    if (pos != lego_port_map.end())
+      hw_lego_ports_[i] = pos->second;
+    else
+    {
+      RCLCPP_FATAL(
+        rclcpp::get_logger("DiffBotSystemHardware"),
+        "Unknown lego port '%s'", info.joints[i].name.c_str());
       return hardware_interface::CallbackReturn::ERROR;
     }
   }
@@ -125,12 +155,10 @@ hardware_interface::CallbackReturn BrickPi3MotorsHardware::on_activate(
   // set some default values
   for (auto i = 0u; i < hw_positions_.size(); i++)
   {
-    if (std::isnan(hw_positions_[i]))
-    {
-      hw_positions_[i] = 0;
-      hw_velocities_[i] = 0;
-      hw_commands_[i] = 0;
-    }
+    brickpi3.reset_motor_encoder(hw_lego_ports_[i]);
+    hw_positions_[i] = 0;
+    hw_velocities_[i] = 0;
+    hw_commands_[i] = 0;
   }
 
   RCLCPP_INFO(rclcpp::get_logger("DiffBotSystemHardware"), "Successfully activated!");
@@ -143,6 +171,8 @@ hardware_interface::CallbackReturn BrickPi3MotorsHardware::on_deactivate(
 {
   // BEGIN: This part here is for exemplary purposes - Please do not copy to your production code
   RCLCPP_INFO(rclcpp::get_logger("DiffBotSystemHardware"), "Deactivating ...please wait...");
+  for (auto i = 0u; i < hw_commands_.size(); i++)
+    brickpi3.set_motor_dps(hw_lego_ports_[i], 0.0);
 
   for (auto i = 0; i < hw_stop_sec_; i++)
   {
@@ -160,13 +190,23 @@ hardware_interface::CallbackReturn BrickPi3MotorsHardware::on_deactivate(
 hardware_interface::return_type BrickPi3MotorsHardware::read(
   const rclcpp::Time & /*time*/, const rclcpp::Duration & period)
 {
+  uint8_t state;
+  int8_t power;
+  int32_t position_degrees;
+  int16_t dps;
+  double radps;
+  double position;
   // BEGIN: This part here is for exemplary purposes - Please do not copy to your production code
   for (std::size_t i = 0; i < hw_velocities_.size(); i++)
   {
     // Simulate DiffBot wheels's movement as a first-order system
     // Update the joint status: this is a revolute joint without any limit.
     // Simply integrates
-    hw_positions_[i] = hw_positions_[i] + period.seconds() * hw_velocities_[i];
+    brickpi3.get_motor_status(hw_lego_ports_[i], state, power, position_degrees, dps);
+    position = position_degrees*(2.0*MATH_PI/360.0);
+    radps = dps*(2.0*MATH_PI/360.0);
+    hw_positions_[i]= position;
+    hw_velocities_[i] = radps;
 
     RCLCPP_INFO(
       rclcpp::get_logger("DiffBotSystemHardware"),
@@ -192,7 +232,8 @@ hardware_interface::return_type BrickPi3MotorsHardware::write(
       rclcpp::get_logger("BrickPi3"), "Got command %.5f for '%s'!", hw_commands_[i],
       info_.joints[i].name.c_str());
 
-    hw_velocities_[i] = hw_commands_[i];
+    double dps = hw_commands_[i]*360.0/(2.0*MATH_PI);
+    brickpi3.set_motor_dps(hw_lego_ports_[i], dps);
   }
   RCLCPP_INFO(rclcpp::get_logger("DiffBotSystemHardware"), "Joints successfully written!");
   // END: This part here is for exemplary purposes - Please do not copy to your production code
