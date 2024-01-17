@@ -198,11 +198,6 @@ hardware_interface::return_type BrickPi3MotorsHardware::read(
     radps = dps*(2.0*MATH_PI/360.0);
     hw_positions_[i]= position;
     hw_velocities_[i] = radps;
-
-    RCLCPP_INFO(
-      rclcpp::get_logger("BrickPi3MotorsHardware"),
-      "Got position state %.5f and velocity state %.5f for '%s'!", hw_positions_[i],
-      hw_velocities_[i], info_.joints[i].name.c_str());
   }
 
   return hardware_interface::return_type::OK;
@@ -211,18 +206,11 @@ hardware_interface::return_type BrickPi3MotorsHardware::read(
 hardware_interface::return_type BrickPi3MotorsHardware::write(
   const rclcpp::Time &, const rclcpp::Duration & /*period*/)
 {
-  RCLCPP_INFO(rclcpp::get_logger("BrickPi3MotorsHardware"), "Writing...");
-
   for (auto i = 0u; i < hw_commands_.size(); i++)
   {
-    RCLCPP_INFO(
-      rclcpp::get_logger("BrickPi3"), "Got command %.5f for '%s'!", hw_commands_[i],
-      info_.joints[i].name.c_str());
-
     double dps = hw_commands_[i]*360.0/(2.0*MATH_PI);
     brickpi3.set_motor_dps(hw_lego_ports_[i], dps);
   }
-  RCLCPP_INFO(rclcpp::get_logger("BrickPi3MotorsHardware"), "Joints successfully written!");
 
   return hardware_interface::return_type::OK;
 }
