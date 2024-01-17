@@ -29,7 +29,7 @@ class ColorSensorNode(Node):
             error_msg = f'Unknown lego input port: {e}'
             self.get_logger().fatal(error_msg)
             raise IOError(error_msg) from e
-        self.declare_parameter('detection_mode', 'color_mode')
+        self.declare_parameter('detection_mode', 'COLOR')
         self.detection_mode = \
             self.get_parameter('detection_mode').get_parameter_value().string_value
         if self.detection_mode == "COLOR":
@@ -55,25 +55,22 @@ class ColorSensorNode(Node):
         """reads color sensor and publishes appropriate message"""
         try:
             value = self.bp.get_sensor(self.lego_port)
+            if self.detection_mode == "COLOR":
+                msg = Color()
+                if value > len(self.colormap):
+                    error_msg = f'Invalid color returned from {self.lego_port_name}'
+                    self.get_logger().error(error_msg)
+                    raise brickpi3.SensorError(error_msg)
+                msg.color = self.colormap[value]
+            else:
+                msg = Illuminance()
+                msg.illuminance = value/100.0
+            msg.header.stamp = self.get_clock().now().to_msg()
+            msg.header.frame_id = "color_sensor"
+            self.publisher.publish(msg)
         except brickpi3.SensorError as e:
             error_msg = f'Invalid color sensor data on {self.lego_port_name}'
             self.get_logger().error(error_msg)
-            raise brickpi3.SensorError(error_msg) from e
-        if self.detection_mode == "COLOR":
-            msg = Color()
-            if value > len(self.colormap):
-                error_msg = f'Invalid color returned from {self.lego_port_name}'
-                self.get_logger().error(error_msg)
-                raise brickpi3.SensorError(error_msg)
-            msg.color = self.colormap[value]
-        else:
-            msg = Illuminance()
-            msg.illuminance = value/100.0
-        msg.header.stamp = self.get_clock().now().to_msg()
-        msg.header.frame_id = "color_sensor"
-        self.publisher.publish(msg)
-        self.get_logger().info(f'Publishing: {msg}')
-
 
 rclpy.init()
 color_sensor_node = ColorSensorNode()

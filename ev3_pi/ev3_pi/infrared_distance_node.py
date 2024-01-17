@@ -34,20 +34,18 @@ class InfraredDistanceNode(Node):
         """Reads infrared distance and publishes Range message on topic infrared_distance"""
         try:
             infrared_distance = self.bp.get_sensor(self.lego_port)
+            msg = Range()
+            msg.header.stamp = self.get_clock().now().to_msg()
+            msg.header.frame_id = "infrared_distance_sensor"
+            msg.radiation_type = Range.INFRARED
+            msg.field_of_view = 0.1  # very approximate
+            msg.min_range = 0.0
+            msg.max_range = 1.0
+            msg.range = infrared_distance/100.0  # raw sensor is in cm's
+            self.publisher.publish(msg)
         except brickpi3.SensorError as e:
             error_msg = f'Invalid infrared distance sensor data on {self.lego_port_name}'
             self.get_logger().error(error_msg)
-            raise brickpi3.SensorError(error_msg) from e
-        msg = Range()
-        msg.header.stamp = self.get_clock().now().to_msg()
-        msg.header.frame_id = "infrared_distance_sensor"
-        msg.radiation_type = Range.INFRARED
-        msg.field_of_view = 0.1  # very approximate
-        msg.min_range = 0.0
-        msg.max_range = 1.0
-        msg.range = infrared_distance/100.0  # raw sensor is in cm's
-        self.publisher.publish(msg)
-        self.get_logger().info(f'Publishing: {msg.range}')
 
 
 rclpy.init()

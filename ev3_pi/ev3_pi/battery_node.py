@@ -14,6 +14,7 @@ class BatteryNode(Node):
         self.declare_parameter('frequency', 1.0/60.0)
         timer_period = 1.0/self.get_parameter('frequency').get_parameter_value().double_value
         self.timer = self.create_timer(timer_period, self.timer_callback)
+        self.timer_callback()
 
     def timer_callback(self):
         """Reads and publishes BatteryState message on battery voltage on /battery_state"""
@@ -23,7 +24,6 @@ class BatteryNode(Node):
         msg.header.frame_id = "battery_sensor"
         msg.voltage = battery_voltage
         self.publisher.publish(msg)
-        self.get_logger().info(f'Publishing: {msg.voltage}')
 
 
 rclpy.init()

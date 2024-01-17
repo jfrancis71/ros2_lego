@@ -32,16 +32,14 @@ class TouchSensorNode(Node):
         """reads touch sensor and publishes TouchSensor on topic /touch_sensor"""
         try:
             value = self.bp.get_sensor(self.lego_port)
+            msg = Button()
+            msg.header.stamp = self.get_clock().now().to_msg()
+            msg.header.frame_id = "touch_sensor"
+            msg.state = value
+            self.publisher.publish(msg)
         except brickpi3.SensorError as e:
             error_msg = f'Invalid touch sensor data on {self.lego_port_name}'
             self.get_logger().error(error_msg)
-            raise brickpi3.SensorError(error_msg) from e
-        msg = Button()
-        msg.header.stamp = self.get_clock().now().to_msg()
-        msg.header.frame_id = "touch_sensor"
-        msg.state = value
-        self.publisher.publish(msg)
-        self.get_logger().info(f'Publishing: {msg.state}')
 
 
 rclpy.init()
