@@ -62,14 +62,19 @@ class Nav(Node):
         world_x, world_y, world_theta = torch.meshgrid(world_xs, world_ys, world_thetas, indexing='xy')
 
         camera_pred_centre = self.world_to_camera(world_dog_centre, world_x, world_y, world_z, world_theta)
-        camera_pred_bottom_left = self.world_to_camera(world_dog_bottom_left, world_x, world_y, world_z, world_theta)
-        camera_pred_bottom_right = self.world_to_camera(world_dog_bottom_right, world_x, world_y, world_z,
-                                                                      world_theta)
         camera_pred_top_left = self.world_to_camera(world_dog_top_left, world_x, world_y, world_z, world_theta)
         camera_pred_top_right = self.world_to_camera(world_dog_top_right, world_x, world_y, world_z,
-                                                 world_theta)
-        camera_pred_width = camera_pred_bottom_right.x - camera_pred_bottom_left.x
-        camera_pred_height = camera_pred_top_left.y - camera_pred_bottom_left.y
+                                                                      world_theta)
+        camera_pred_bottom_left = self.world_to_camera(world_dog_bottom_left, world_x, world_y, world_z, world_theta)
+        camera_pred_bottom_right = self.world_to_camera(world_dog_bottom_right, world_x, world_y, world_z,
+                                                        world_theta)
+
+        pred_left = (camera_pred_bottom_left.x + camera_pred_top_left.x)/2
+        pred_right = (camera_pred_bottom_right.x + camera_pred_top_right.x)/2
+        pred_top = (camera_pred_top_left.y + camera_pred_top_right.y)/2
+        pred_bottom = (camera_pred_bottom_left.y + camera_pred_bottom_right.y) / 2
+        camera_pred_width = pred_right - pred_left
+        camera_pred_height = pred_top - pred_bottom
         res1 = torch.distributions.normal.Normal(camera_pred_centre.x, 5).log_prob(torch.tensor(camera_dog_centre_x))
         res2 = torch.distributions.normal.Normal(camera_pred_width, 5).log_prob(torch.tensor(bbox.size_x))
         res3 = torch.distributions.normal.Normal(camera_pred_height, 5).log_prob(torch.tensor(bbox.size_y))
