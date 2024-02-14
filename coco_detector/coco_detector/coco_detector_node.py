@@ -21,7 +21,7 @@ from torchvision.utils import draw_bounding_boxes
 Detection = collections.namedtuple("Detection", "label, bbox, score")
 
 
-class ObjectDetectorNode(Node):
+class CocoDetectorNode(Node):
     """Detects COCO objects in image and publishes on ROS2.
 
     Subscribes to /image and publishes Detection2DArray on /detected_objects.
@@ -30,7 +30,7 @@ class ObjectDetectorNode(Node):
 
     # pylint: disable=R0902 disable too many instance variables warning for this class
     def __init__(self):
-        super().__init__("object_detector")
+        super().__init__("coco_detector_node")
         self.declare_parameter('device', 'cpu')
         self.declare_parameter('detection_threshold', 0.9)
         self.declare_parameter('publish_annotated_image', True)
@@ -118,7 +118,7 @@ class ObjectDetectorNode(Node):
 
 
 rclpy.init()
-object_detector_node = ObjectDetectorNode()
-rclpy.spin(object_detector_node)
-object_detector_node.destroy_node()
+coco_detector_node = CocoDetectorNode()
+rclpy.spin(coco_detector_node)
+coco_detector_node.destroy_node()
 rclpy.shutdown()
