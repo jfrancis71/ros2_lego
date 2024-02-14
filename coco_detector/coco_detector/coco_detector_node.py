@@ -34,9 +34,6 @@ class CocoDetectorNode(Node):
         self.declare_parameter('device', 'cpu')
         self.declare_parameter('detection_threshold', 0.9)
         self.declare_parameter('publish_annotated_image', True)
-        # prefix bool below to avoid name collision with member function
-        self.bool_publish_annotated_image =(
-            self.get_parameter('publish_annotated_image').get_parameter_value().bool_value)
         self.device = self.get_parameter('device').get_parameter_value().string_value
         self.detection_threshold = \
             self.get_parameter('detection_threshold').get_parameter_value().double_value
@@ -47,11 +44,11 @@ class CocoDetectorNode(Node):
             10)
         self.detected_objects_publisher = \
             self.create_publisher(Detection2DArray, "detected_objects", 10)
-        if self.bool_publish_annotated_image:
-            self.detected_objects_image_publisher = \
+        if self.get_parameter('publish_annotated_image').get_parameter_value().bool_value:
+            self.annotated_image_publisher = \
                 self.create_publisher(Image, "annotated_image", 10)
         else:
-            self.detected_objects_image_publisher = None
+            self.annotated_image_publisher = None
         self.bridge = CvBridge()
         self.model = detection_model.fasterrcnn_mobilenet_v3_large_320_fpn(
             weights="FasterRCNN_MobileNet_V3_Large_320_FPN_Weights.COCO_V1",
@@ -95,7 +92,7 @@ class CocoDetectorNode(Node):
         ros2_image_msg = self.bridge.cv2_to_imgmsg(annotated_image.numpy().transpose(1, 2, 0),
                                                    encoding="rgb8")
         ros2_image_msg.header = header
-        self.detected_objects_image_publisher.publish(ros2_image_msg)
+        self.annotated_image_publisher.publish(ros2_image_msg)
 
     def listener_callback(self, msg):
         """Reads image and publishes on /detected_objects and /annotated_image."""
@@ -113,7 +110,7 @@ class CocoDetectorNode(Node):
         detection_array.detections = \
             [self.mobilenet_to_ros2(detection, msg.header) for detection in filtered_detections]
         self.detected_objects_publisher.publish(detection_array)
-        if self.bool_publish_annotated_image:
+        if self.annotated_image_publisher is not None:
             self.publish_annotated_image(filtered_detections, msg.header, image)
 
 
