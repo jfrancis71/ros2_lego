@@ -31,45 +31,39 @@ class Nav(Node):
             WorldPoint(1.5, 0.14, .52),
             WorldPoint(1.5, -0.14, .52)
         )
+        self.num_grid_cells = 101
+        self.num_orientation_cells = 16
+        self.world_grid_length = 3.0
+        self.world_cell_size = self.world_grid_length/self.num_grid_cells
 
-    def world_to_camera(self, world_point, world_x, world_y, world_z, world_theta):
-        world_translate_x = world_point.x - world_x
-        world_translate_y = world_point.y - world_y
-        world_translate_z = world_point.z - world_z
-        world_rotate_x = torch.sin(world_theta) * world_translate_y + torch.cos(
-            world_theta) * world_translate_x
-        world_rotate_y = torch.cos(world_theta) * world_translate_y - torch.sin(
-            world_theta) * world_translate_x
+        self.world_z = .24
+
+        self.world_position = (torch.arange(self.num_grid_cells)+0.5) * self.world_cell_size - self.world_grid_length/2.0
+        self.world_xs = self.world_position
+        self.world_ys = torch.flip(self.world_position, dims=[0])
+        self.world_thetas = torch.arange(self.num_orientation_cells)*2*math.pi/self.num_orientation_cells
+        self.world_x, self.world_y, self.world_theta = torch.meshgrid(self.world_xs, self.world_ys, self.world_thetas, indexing='xy')
+
+
+    def world_to_camera(self, world_point):
+        world_translate_x = world_point.x - self.world_x
+        world_translate_y = world_point.y - self.world_y
+        world_translate_z = world_point.z - self.world_z
+        world_rotate_x = torch.sin(self.world_theta) * world_translate_y + torch.cos(
+            self.world_theta) * world_translate_x
+        world_rotate_y = torch.cos(self.world_theta) * world_translate_y - torch.sin(
+            self.world_theta) * world_translate_x
         world_rotate_z = world_translate_z
         camera_pred_x = f * (-world_rotate_y) / (world_rotate_x)
         camera_pred_y = f * (world_rotate_z) / (world_rotate_x)
         return CameraPoint(camera_pred_x, camera_pred_y)
 
     def prob_map(self, world_object, bbox):
-
-        num_grid_cells = 101
-        num_orientation_cells = 16
-        world_grid_length = 3.0
-        world_cell_size = world_grid_length/num_grid_cells
-
-        camera_dog_centre_x = bbox.center.position.x - 160
-        camera_dog_centre_y = bbox.center.position.y - 120
-
-        world_z = .24
-
-        world_position = (torch.arange(num_grid_cells)+0.5) * world_cell_size - world_grid_length/2.0
-        world_xs = world_position
-        world_ys = torch.flip(world_position, dims=[0])
-        world_thetas = torch.arange(num_orientation_cells)*2*math.pi/num_orientation_cells
-        world_x, world_y, world_theta = torch.meshgrid(world_xs, world_ys, world_thetas, indexing='xy')
-
-        camera_pred_centre = self.world_to_camera(world_object.centre, world_x, world_y, world_z, world_theta)
-        camera_pred_top_left = self.world_to_camera(world_object.top_left, world_x, world_y, world_z, world_theta)
-        camera_pred_top_right = self.world_to_camera(world_object.top_right, world_x, world_y, world_z,
-                                                                      world_theta)
-        camera_pred_bottom_left = self.world_to_camera(world_object.bottom_left, world_x, world_y, world_z, world_theta)
-        camera_pred_bottom_right = self.world_to_camera(world_object.bottom_right, world_x, world_y, world_z,
-                                                        world_theta)
+        camera_pred_centre = self.world_to_camera(world_object.centre)
+        camera_pred_top_left = self.world_to_camera(world_object.top_left)
+        camera_pred_top_right = self.world_to_camera(world_object.top_right)
+        camera_pred_bottom_left = self.world_to_camera(world_object.bottom_left)
+        camera_pred_bottom_right = self.world_to_camera(world_object.bottom_right)
 
         pred_left = (camera_pred_bottom_left.x + camera_pred_top_left.x)/2
         pred_right = (camera_pred_bottom_right.x + camera_pred_top_right.x)/2
@@ -77,13 +71,9 @@ class Nav(Node):
         pred_bottom = (camera_pred_bottom_left.y + camera_pred_bottom_right.y) / 2
         camera_pred_width = pred_right - pred_left
         camera_pred_height = pred_top - pred_bottom
-        res1 = torch.distributions.normal.Normal(camera_pred_centre.x, 5).log_prob(torch.tensor(camera_dog_centre_x))
+        res1 = torch.distributions.normal.Normal(camera_pred_centre.x, 5).log_prob(torch.tensor(bbox.center.position.x))
         res2 = torch.distributions.normal.Normal(camera_pred_width, 5).log_prob(torch.tensor(bbox.size_x))
         res3 = torch.distributions.normal.Normal(camera_pred_height, 5).log_prob(torch.tensor(bbox.size_y))
-#        res2 = torch.distributions.normal.Normal(camera_pred_left_x, 5).log_prob(torch.tensor(camera_dog_left_x))
-#        res3 = torch.distributions.normal.Normal(camera_pred_centre_y, 5).log_prob(torch.tensor(camera_dog_centre_y))
-#        res4 = torch.distributions.normal.Normal(camera_pred_left_y, 5).log_prob(
-#            torch.tensor(camera_dog_left_y))
         res = res1 + res2 + res3
         mynorm = res - torch.logsumexp(res, dim=[0, 1, 2], keepdim=False)
         smyprobs = torch.exp(mynorm)
