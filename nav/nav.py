@@ -11,6 +11,7 @@ import torch
 
 f = 428
 WorldPoint = collections.namedtuple("WorldPoint", "x, y, z")
+WorldObject = collections.namedtuple("WorldObject", "centre, bottom_left, bottom_right, top_left, top_right")
 CameraPoint = collections.namedtuple("CameraPoint", "x, y")
 
 class Nav(Node):
@@ -23,6 +24,13 @@ class Nav(Node):
             10)
         self.probmap_publisher = \
             self.create_publisher(OccupancyGrid, "probmap", 10)
+        self.world_object = WorldObject(
+            WorldPoint(1.5, 0.0, 0.27),
+            WorldPoint(1.5, 0.14, .02),
+            WorldPoint(1.5, -0.14, .02),
+            WorldPoint(1.5, 0.14, .52),
+            WorldPoint(1.5, -0.14, .52)
+        )
 
     def world_to_camera(self, world_point, world_x, world_y, world_z, world_theta):
         world_translate_x = world_point.x - world_x
@@ -37,7 +45,7 @@ class Nav(Node):
         camera_pred_y = f * (world_rotate_z) / (world_rotate_x)
         return CameraPoint(camera_pred_x, camera_pred_y)
 
-    def prob_map(self, bbox):
+    def prob_map(self, world_object, bbox):
 
         num_grid_cells = 101
         num_orientation_cells = 16
@@ -47,12 +55,6 @@ class Nav(Node):
         camera_dog_centre_x = bbox.center.position.x - 160
         camera_dog_centre_y = bbox.center.position.y - 120
 
-        world_dog_centre = WorldPoint(1.5, 0.0, 0.27)
-        world_dog_bottom_left = WorldPoint(1.5, 0.14, .02)
-        world_dog_bottom_right = WorldPoint(1.5, -0.14, .02)
-        world_dog_top_left = WorldPoint(1.5, 0.14, .52)
-        world_dog_top_right = WorldPoint(1.5, -0.14, .52)
-
         world_z = .24
 
         world_position = (torch.arange(num_grid_cells)+0.5) * world_cell_size - world_grid_length/2.0
@@ -61,12 +63,12 @@ class Nav(Node):
         world_thetas = torch.arange(num_orientation_cells)*2*math.pi/num_orientation_cells
         world_x, world_y, world_theta = torch.meshgrid(world_xs, world_ys, world_thetas, indexing='xy')
 
-        camera_pred_centre = self.world_to_camera(world_dog_centre, world_x, world_y, world_z, world_theta)
-        camera_pred_top_left = self.world_to_camera(world_dog_top_left, world_x, world_y, world_z, world_theta)
-        camera_pred_top_right = self.world_to_camera(world_dog_top_right, world_x, world_y, world_z,
+        camera_pred_centre = self.world_to_camera(world_object.centre, world_x, world_y, world_z, world_theta)
+        camera_pred_top_left = self.world_to_camera(world_object.top_left, world_x, world_y, world_z, world_theta)
+        camera_pred_top_right = self.world_to_camera(world_object.top_right, world_x, world_y, world_z,
                                                                       world_theta)
-        camera_pred_bottom_left = self.world_to_camera(world_dog_bottom_left, world_x, world_y, world_z, world_theta)
-        camera_pred_bottom_right = self.world_to_camera(world_dog_bottom_right, world_x, world_y, world_z,
+        camera_pred_bottom_left = self.world_to_camera(world_object.bottom_left, world_x, world_y, world_z, world_theta)
+        camera_pred_bottom_right = self.world_to_camera(world_object.bottom_right, world_x, world_y, world_z,
                                                         world_theta)
 
         pred_left = (camera_pred_bottom_left.x + camera_pred_top_left.x)/2
@@ -92,7 +94,7 @@ class Nav(Node):
     def listener_callback(self, msg):
         for det in msg.detections:
             print(det)
-            myprobs = self.prob_map(det.bbox)
+            myprobs = self.prob_map(self.world_object, det.bbox)
             kernel = torch.ones([1, 1, 3, 3])
             conv = torch.nn.functional.conv2d(myprobs.unsqueeze(0), kernel, padding=1)[0]
             prob_map_msg = OccupancyGrid()
@@ -120,7 +122,7 @@ def test2(node):
     bounding_box.center.position.y = 96.0
     bounding_box.size_x = 76.0
     bounding_box.size_y = 112.0
-    node.prob_map(bounding_box)
+    node.prob_map(node.world_object, bounding_box)
 
 
 rclpy.init()
