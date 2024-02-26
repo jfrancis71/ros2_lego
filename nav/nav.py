@@ -24,7 +24,7 @@ class Nav(Node):
             10)
         self.probmap_publisher = \
             self.create_publisher(OccupancyGrid, "probmap", 10)
-        self.world_object = WorldObject(
+        self.world_dog = WorldObject(
             WorldPoint(1.5, 0.0, 0.27),
             WorldPoint(1.5, 0.14, .02),
             WorldPoint(1.5, -0.14, .02),
@@ -84,7 +84,7 @@ class Nav(Node):
     def listener_callback(self, msg):
         for det in msg.detections:
             print(det)
-            myprobs = self.prob_map(self.world_object, det.bbox)
+            myprobs = self.prob_map(self.world_dog, det.bbox)
             kernel = torch.ones([1, 1, 3, 3])
             conv = torch.nn.functional.conv2d(myprobs.unsqueeze(0), kernel, padding=1)[0]
             prob_map_msg = OccupancyGrid()
@@ -112,7 +112,7 @@ def test2(node):
     bounding_box.center.position.y = 96.0
     bounding_box.size_x = 76.0
     bounding_box.size_y = 112.0
-    node.prob_map(node.world_object, bounding_box)
+    node.prob_map(node.world_dog, bounding_box)
 
 
 rclpy.init()
