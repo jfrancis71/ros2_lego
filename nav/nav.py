@@ -3,7 +3,7 @@ import math
 
 from vision_msgs.msg import Detection2DArray
 from vision_msgs.msg import BoundingBox2D
-from nav_msgs.msg import OccupancyGrid
+from nav_msgs.msg import OccupancyGrid, Odometry
 from geometry_msgs.msg import Point, Pose, PoseStamped, Quaternion
 import rclpy
 from rclpy.node import Node
@@ -23,10 +23,15 @@ BoundingBoxes = collections.namedtuple("BoundingBoxes", "center, width, height")
 class Nav(Node):
     def __init__(self):
         super().__init__("nav")
-        self.subscription = self.create_subscription(
+        self.image_subscription = self.create_subscription(
             Detection2DArray,
             "/detected_objects",
-            self.listener_callback,
+            self.detections_callback,
+            10)
+        self.pose_subscription = self.create_subscription(
+            Odometry,
+            "/differential_drive_controller/odom",
+            self.pose_callback,
             10)
         self.probmap_publisher = \
             self.create_publisher(OccupancyGrid, "probmap", 10)
@@ -44,6 +49,8 @@ class Nav(Node):
         self.num_orientation_cells = 128
         self.world_grid_length = 3.0
         self.world_cell_size = self.world_grid_length/self.num_grid_cells
+        self.grid_cells_origin_x = -1.5
+        self.grid_cells_origin_y = -1.5
 
         self.world_z = .24
 
@@ -62,6 +69,9 @@ class Nav(Node):
         area_ratio = cons_area / ((self.boxes.width*self.boxes.height)+cons_area)
         area_ratio = torch.nan_to_num(area_ratio, nan=0.0)
         self.proba = 0.05 * (1-area_ratio) + 0.95 * area_ratio
+        self.current_probability_map = \
+            torch.zeros([self.num_grid_cells, self.num_grid_cells, self.num_orientation_cells]) + \
+            (1.0/(self.num_grid_cells*self.num_grid_cells*self.num_orientation_cells))
 
     def world_to_camera(self, world_point):
         world_translate_x = world_point.x - self.world_x
@@ -92,7 +102,6 @@ class Nav(Node):
         bounding_boxes = BoundingBoxes(camera_pred_centre, camera_pred_width, camera_pred_height)
         return bounding_boxes
 
-
     def prob_map(self, world_object, bbox):
         scale = 25.0
         res1 = torch.distributions.normal.Normal(self.boxes.center.x, scale).log_prob(torch.tensor(bbox.center.position.x-160))
@@ -103,8 +112,6 @@ class Nav(Node):
         res = res1 + res2 + res3 + res4
         mynorm = res - torch.logsumexp(res, dim=[0, 1, 2], keepdim=False)
         smyprobs = torch.exp(mynorm)
-#        myprobs = torch.sum(smyprobs, axis=2)
-
         return smyprobs
 
     def probmessage_cond_a(self, detections, assignment):
@@ -127,48 +134,47 @@ class Nav(Node):
         norm_probs = probs1 / probs1.sum()
         return norm_probs
 
-    def proby(self, detections):
-        probs1 = self.world_x * 0.0
-        for a in range(len(detections)):
-            probs1 += self.prob_map(self.world_dog, detections[a].bbox)
-        return probs1
-
-
-    def listener_callback(self, msg):
-        tmyprobs = self.probmessage(msg.detections)
-#        tmyprobs = self.prob_map(self.world_dog, det.bbox)
-
-        myprobs = torch.sum(tmyprobs, axis=2)
-        print(myprobs.max())
+    def publish_occupancy_grid_msg(self, pose_probability_map, header):
+        myprobs = torch.sum(pose_probability_map, axis=2)
         kernel = torch.ones([1, 1, 3, 3])
         conv = torch.nn.functional.conv2d(myprobs.unsqueeze(0), kernel, padding=1)[0]
         prob_map_msg = OccupancyGrid()
-        prob_map_msg.header = msg.header
+        prob_map_msg.header = header
         prob_map_msg.header.frame_id = "base_link"
-        prob_map_msg.info.resolution = 3/100
-        prob_map_msg.info.width = 101
-        prob_map_msg.info.height = 101
-        prob_map_msg.info.origin.position.x = -1.5
-        prob_map_msg.info.origin.position.y = -1.5
+        prob_map_msg.info.resolution = self.world_cell_size
+        prob_map_msg.info.width = self.num_grid_cells
+        prob_map_msg.info.height = self.num_grid_cells
+        prob_map_msg.info.origin.position.x = self.grid_cells_origin_x
+        prob_map_msg.info.origin.position.y = self.grid_cells_origin_y
         prob_map_msg.data = torch.flip(100.0 * conv, dims=[0]).type(torch.int).flatten().tolist()
         self.probmap_publisher.publish(prob_map_msg)
 
-        loc = (conv==torch.max(conv)).nonzero()[0]
-        orientation = tmyprobs[loc[0], loc[1]].argmax()
+    def publish_pose_msg(self, pose_probability_map, header):
+        loc = (pose_probability_map==torch.max(pose_probability_map)).nonzero()[0]
+        orientation = pose_probability_map[loc[0], loc[1]].argmax()
         pose_msg = Pose()
         point = Point()
-        point.x = float(prob_map_msg.info.origin.position.x + loc[1]*prob_map_msg.info.resolution)
-        point.y = float(prob_map_msg.info.origin.position.y + 3.0 - (loc[0] * prob_map_msg.info.resolution))
+        point.x = float(self.grid_cells_origin_x + loc[1]*self.world_cell_size)
+        point.y = float(self.grid_cells_origin_y + self.world_grid_length - (loc[0]*self.world_cell_size))
         pose_msg.position = point
         quaternion = R.from_euler('xyz', [0, 0, (orientation/self.num_orientation_cells)*2*3.141]).as_quat()
         q = Quaternion()
         q.x, q.y, q.z, q.w = quaternion
         pose_msg.orientation = q
         pose_stamped = PoseStamped()
-        pose_stamped.header = msg.header
+        pose_stamped.header = header
         pose_stamped.pose = pose_msg
         self.pose_publisher.publish(pose_stamped)
+
+    def detections_callback(self, msg):
+        self.pose_from_detections_probability_map = self.probmessage(msg.detections)
+        self.publish_occupancy_grid_msg(self.pose_from_detections_probability_map, msg.header)
+        self.publish_pose_msg(self.pose_from_detections_probability_map, msg.header)
         print("loc")
+
+    def pose_callback(self, msg):
+        print("POSE")
+
 
 def test1(node):
     bounding_box = BoundingBox2D()
