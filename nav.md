@@ -5,18 +5,18 @@ Let's quantize into buckets of unit length:
 
 p(x) = $\sum_i \alpha_i I \\{ i<=x<=i+1\\}$
 
-$\alpha x$
-
 We move forward by $\Delta x$:
 
-
-
-$$ p'(x) = \int p(x-\Delta x) dx $$
+$$ p'(x) = p(x-\Delta x) $$
 
 So:
 
-$$ \alpha'_i = \int p'(x) dx $$
+```math
+\alpha'_i = \int_{-\infty}^\infty p'(x) dx$$
+```
 
-$$ \alpha'_i = \int \int p(x'-\Delta x) dx' dx $$
+$$ \alpha'_i = \int p(x-\Delta x) dx $$
 
-$$ \alpha'_i = \int \int \sum_j \alpha_j I \\{ j<=x'<=j+1\\} dx' dx $$
+```math
+\alpha'_i = \int_{i}^{i+1} \sum_j \alpha_j I \{ j\leq x-\Delta x\leq j+1 \} dx
+```
