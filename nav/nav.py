@@ -5,6 +5,7 @@ import scipy
 
 from vision_msgs.msg import Detection2DArray
 from vision_msgs.msg import BoundingBox2D
+from sensor_msgs.msg import Image
 from nav_msgs.msg import OccupancyGrid, Odometry
 from geometry_msgs.msg import Point, Pose, PoseStamped, Quaternion
 import rclpy
@@ -12,7 +13,11 @@ from rclpy.node import Node
 import torch
 from scipy.spatial.transform import Rotation as R
 from tf_transformations import euler_from_quaternion
+from cv_bridge import CvBridge
+from torchvision.utils import draw_bounding_boxes
 
+
+Detection = collections.namedtuple("Detection", "label, bbox, score")
 
 
 f_x = 494
@@ -26,10 +31,15 @@ BoundingBoxes = collections.namedtuple("BoundingBoxes", "center, width, height")
 class Nav(Node):
     def __init__(self):
         super().__init__("nav")
-        self.image_subscription = self.create_subscription(
+        self.detections_subscription = self.create_subscription(
             Detection2DArray,
             "/detected_objects",
             self.detections_callback,
+            10)
+        self.annotated_image_subscription = self.create_subscription(
+            Image,
+            "/annotated_image",
+            self.annotated_image_callback,
             10)
         self.pose_subscription = self.create_subscription(
             Odometry,
@@ -40,6 +50,8 @@ class Nav(Node):
             self.create_publisher(OccupancyGrid, "probmap", 10)
         self.pose_publisher = \
             self.create_publisher(PoseStamped, "nav_pose", 10)
+        self.debug_image_publisher = \
+            self.create_publisher(Image, "debug_image", 10)
 
         self.world_dog = WorldObject("dog",
             WorldPoint(1.5, 0.0, 0.27),
@@ -73,15 +85,18 @@ class Nav(Node):
         area_ratio = torch.nan_to_num(area_ratio, nan=0.0)
         self.proba = 0.05 * (1-area_ratio) + 0.95 * area_ratio
         self.current_probability_map = \
-            torch.zeros([self.num_grid_cells, self.num_grid_cells, self.num_orientation_cells])
-#             + \
-#            (1.0/(self.num_grid_cells*self.num_grid_cells*self.num_orientation_cells)))
-        self.current_probability_map[int(self.num_grid_cells/2), int(self.num_grid_cells/2), 0] = 1.0
+            torch.zeros([self.num_grid_cells, self.num_grid_cells, self.num_orientation_cells]) \
+             + \
+            (1.0/(self.num_grid_cells*self.num_grid_cells*self.num_orientation_cells))
+#        self.current_probability_map[int(self.num_grid_cells/2), int(self.num_grid_cells/2), 0] = 1.0
         self.last_inertial_position = None
         self.position_kernel = np.zeros([11,11])
         self.orientation_kernel = np.zeros([self.num_orientation_cells])
         self.position_kernel[5,5] = 1.0
         self.orientation_kernel[0] = 1.0
+        self.state = 0
+        self.detections = None
+        self.bridge = CvBridge()
 
     def world_to_camera(self, world_point):
         world_translate_x = world_point.x - self.world_x
@@ -92,8 +107,8 @@ class Nav(Node):
         world_rotate_y = torch.cos(self.world_theta) * world_translate_y - torch.sin(
             self.world_theta) * world_translate_x
         world_rotate_z = world_translate_z
-        camera_pred_x = f_x * (-world_rotate_y) / (world_rotate_x)
-        camera_pred_y = f_y * -(world_rotate_z) / (world_rotate_x)  # using image coords y=0 means top
+        camera_pred_x = 160 + f_x * (-world_rotate_y) / (world_rotate_x)
+        camera_pred_y = 120 + f_y * -(world_rotate_z) / (world_rotate_x)  # using image coords y=0 means top
         return CameraPoint(camera_pred_x, camera_pred_y)
 
     def world_to_bbox(self, world_object):
@@ -114,11 +129,11 @@ class Nav(Node):
 
     def prob_map(self, world_object, bbox):
         scale = 25.0
-        res1 = torch.distributions.normal.Normal(self.boxes.center.x, scale).log_prob(torch.tensor(bbox.center.position.x-160))
+        res1 = torch.distributions.normal.Normal(self.boxes.center.x, scale).log_prob(torch.tensor(bbox.center.position.x))
         res2 = torch.distributions.normal.Normal(self.boxes.width, scale).log_prob(torch.tensor(bbox.size_x))
         res3 = torch.distributions.normal.Normal(self.boxes.height, scale).log_prob(torch.tensor(bbox.size_y))
         res4 = torch.distributions.normal.Normal(self.boxes.center.y, scale).log_prob(
-            torch.tensor(bbox.center.position.y - 120))
+            torch.tensor(bbox.center.position.y))
         res = res1 + res2 + res3 + res4
         mynorm = res - torch.logsumexp(res, dim=[0, 1, 2], keepdim=False)
         smyprobs = torch.exp(mynorm)
@@ -156,12 +171,17 @@ class Nav(Node):
         prob_map_msg.info.height = self.num_grid_cells
         prob_map_msg.info.origin.position.x = self.grid_cells_origin_x
         prob_map_msg.info.origin.position.y = self.grid_cells_origin_y
+        conv = conv/conv.max()
         prob_map_msg.data = torch.flip(100.0 * conv, dims=[0]).type(torch.int).flatten().tolist()
         self.probmap_publisher.publish(prob_map_msg)
 
-    def publish_pose_msg(self, pose_probability_map, header):
+    def get_location_MLE(self, pose_probability_map):
         loc = (pose_probability_map==torch.max(pose_probability_map)).nonzero()[0]
         orientation = pose_probability_map[loc[0], loc[1]].argmax()
+        return (loc, orientation)
+
+    def publish_pose_msg(self, pose_probability_map, header):
+        (loc, orientation) = self.get_location_MLE(pose_probability_map)
         pose_msg = Pose()
         point = Point()
         point.x = float(self.grid_cells_origin_x + loc[1]*self.world_cell_size)
@@ -176,14 +196,42 @@ class Nav(Node):
         pose_stamped.pose = pose_msg
         self.pose_publisher.publish(pose_stamped)
 
+    def annotated_image_callback(self, msg):
+        cv_image = self.bridge.imgmsg_to_cv2(msg, desired_encoding="rgb8")
+        image = cv_image.copy().transpose((2, 0, 1))
+        self.annotated_image = image
+
+    def publish_vision_debug_image(self, pose_probability_map, header):
+        (loc, orientation) = self.get_location_MLE(pose_probability_map)
+        box_tensor = torch.tensor([self.boxes.center.x[loc[0], loc[1], orientation]])
+        score = self.proba[loc[0], loc[1], orientation]
+        box = Detection("debug", box_tensor, score)
+        center_x = self.boxes.center.x[loc[0], loc[1], orientation]
+        center_y = self.boxes.center.y[loc[0], loc[1], orientation]
+        width = self.boxes.width[loc[0], loc[1], orientation]
+        height = self.boxes.height[loc[0], loc[1], orientation]
+        xmin = center_x - width / 2
+        xmax = center_x + width / 2
+        ymin = center_y - height / 2
+        ymax = center_y + height / 2
+        box = torch.tensor([[xmin, ymin, xmax, ymax]])
+        print("Box=", box)
+        debug_image = draw_bounding_boxes(torch.tensor(self.annotated_image), box,
+                                              ["debug"], colors="green")
+        ros2_image_msg = self.bridge.cv2_to_imgmsg(debug_image.numpy().transpose(1, 2, 0), encoding = "rgb8")
+        ros2_image_msg.header = header
+        self.debug_image_publisher.publish(ros2_image_msg)
+
     def detections_callback(self, msg):
 #        self.pose_from_detections_probability_map = self.probmessage(msg.detections)
 #        self.publish_occupancy_grid_msg(self.pose_from_detections_probability_map, msg.header)
 #        self.publish_pose_msg(self.pose_from_detections_probability_map, msg.header)
 #        print("loc")
-        pass
+        self.detections = msg.detections
 
     def pose_callback(self, msg):
+        if self.detections is None:
+            return
         print("POSE", msg.pose.pose.position)
         current_inertial_position = torch.tensor([msg.pose.pose.position.x, msg.pose.pose.position.y])
         q = msg.pose.pose.orientation
@@ -217,8 +265,19 @@ class Nav(Node):
         # rescale
         self.current_probability_map = torch.clip(self.current_probability_map, min=0.0)
         self.current_probability_map = self.current_probability_map / self.current_probability_map.sum()
+        pose_from_detections_probability_map = self.probmessage(self.detections)
         if inertial_position_difference.norm() > .001 or abs(inertial_orientation_difference) > .001:
             print("Moving")
+            self.state = 0
+        else:
+            if self.state == 0 and self.detections is not None:
+
+                self.publish_vision_debug_image(pose_from_detections_probability_map, msg.header)
+                self.current_probability_map = self.current_probability_map * pose_from_detections_probability_map
+#                self.current_probability_map = pose_from_detections_probability_map
+                self.current_probability_map = self.current_probability_map / self.current_probability_map.sum()
+                self.state = 1
+#        self.current_probability_map = pose_from_detections_probability_map
         header = msg.header
         self.publish_occupancy_grid_msg(self.current_probability_map, header)
         self.publish_pose_msg(self.current_probability_map, header)
