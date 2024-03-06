@@ -60,6 +60,13 @@ class Nav(Node):
             WorldPoint(1.5, 0.11, .52),
             WorldPoint(1.5, -0.11, .52)
         )
+        self.world_cat = WorldObject("cat",
+                                     WorldPoint(1.5, 0.0, 0.27),
+                                     WorldPoint(1.5, 0.11, .02),
+                                     WorldPoint(1.5, -0.11, .02),
+                                     WorldPoint(1.5, 0.11, .52),
+                                     WorldPoint(1.5, -0.11, .52)
+                                     )
         self.num_grid_cells = 101
         self.num_orientation_cells = 128
         self.world_grid_length = 3.0
@@ -75,15 +82,8 @@ class Nav(Node):
         self.world_thetas = torch.arange(self.num_orientation_cells)*2*math.pi/self.num_orientation_cells
         self.world_x, self.world_y, self.world_theta = torch.meshgrid(self.world_xs, self.world_ys, self.world_thetas, indexing='xy')
 
-        self.boxes = self.world_to_bbox(self.world_dog)
-        cons_camera_left_x = torch.clip(self.boxes.center.x - self.boxes.width, min=-160, max=+160)
-        cons_camera_right_x = torch.clip(self.boxes.center.x + self.boxes.width, min=-160, max=+160)
-        cons_camera_bottom_y = torch.clip(self.boxes.center.y - self.boxes.height, min=-120, max=+120)
-        cons_camera_top_y = torch.clip(self.boxes.center.y + self.boxes.height, min=-120, max=+120)
-        cons_area = (cons_camera_right_x-cons_camera_left_x)*(cons_camera_top_y-cons_camera_bottom_y)
-        area_ratio = cons_area / ((self.boxes.width*self.boxes.height)+cons_area)
-        area_ratio = torch.nan_to_num(area_ratio, nan=0.0)
-        self.proba = 0.05 * (1-area_ratio) + 0.95 * area_ratio
+        self.dog_boxes = self.world_to_bbox(self.world_dog)
+        self.dog_boxes_probability = self.box_probability(self.dog_boxes)
         self.current_probability_map = \
             torch.zeros([self.num_grid_cells, self.num_grid_cells, self.num_orientation_cells]) \
              + \
@@ -97,6 +97,20 @@ class Nav(Node):
         self.state = 0
         self.detections = None
         self.bridge = CvBridge()
+
+    def box_probability(self, boxes):
+        """Computes the probability of a bounding box being detected.
+        Example: If the bounding box is completely outside the camera field of view, it won't be detected.
+        """
+        cons_camera_left_x = torch.clip(boxes.center.x - boxes.width, min=-160, max=+160)
+        cons_camera_right_x = torch.clip(boxes.center.x + boxes.width, min=-160, max=+160)
+        cons_camera_bottom_y = torch.clip(boxes.center.y - boxes.height, min=-120, max=+120)
+        cons_camera_top_y = torch.clip(boxes.center.y + boxes.height, min=-120, max=+120)
+        cons_area = (cons_camera_right_x-cons_camera_left_x)*(cons_camera_top_y-cons_camera_bottom_y)
+        area_ratio = cons_area / ((boxes.width*boxes.height)+cons_area)
+        area_ratio = torch.nan_to_num(area_ratio, nan=0.0)
+        return 0.05 * (1-area_ratio) + 0.95 * area_ratio
+
 
     def world_to_camera(self, world_point):
         world_translate_x = world_point.x - self.world_x
@@ -127,12 +141,12 @@ class Nav(Node):
         bounding_boxes = BoundingBoxes(camera_pred_centre, camera_pred_width, camera_pred_height)
         return bounding_boxes
 
-    def prob_map(self, world_object, bbox):
+    def prob_map(self, boxes, bbox):
         scale = 25.0
-        res1 = torch.distributions.normal.Normal(self.boxes.center.x, scale).log_prob(torch.tensor(bbox.center.position.x))
-        res2 = torch.distributions.normal.Normal(self.boxes.width, scale).log_prob(torch.tensor(bbox.size_x))
-        res3 = torch.distributions.normal.Normal(self.boxes.height, scale).log_prob(torch.tensor(bbox.size_y))
-        res4 = torch.distributions.normal.Normal(self.boxes.center.y, scale).log_prob(
+        res1 = torch.distributions.normal.Normal(boxes.center.x, scale).log_prob(torch.tensor(bbox.center.position.x))
+        res2 = torch.distributions.normal.Normal(boxes.width, scale).log_prob(torch.tensor(bbox.size_x))
+        res3 = torch.distributions.normal.Normal(boxes.height, scale).log_prob(torch.tensor(bbox.size_y))
+        res4 = torch.distributions.normal.Normal(boxes.center.y, scale).log_prob(
             torch.tensor(bbox.center.position.y))
         res = res1 + res2 + res3 + res4
         mynorm = res - torch.logsumexp(res, dim=[0, 1, 2], keepdim=False)
@@ -148,14 +162,14 @@ class Nav(Node):
             probs = self.world_x*0.0
             for m in detections:
                 if m.results[0].hypothesis.class_id == "dog":
-                    probs += prob_dist_random_boxes**(len(detections)-1) * self.prob_map(self.world_dog, m.bbox)
+                    probs += prob_dist_random_boxes**(len(detections)-1) * self.prob_map(self.dog_boxes, m.bbox)
         return probs
 
     def probmessage(self, detections):
         probs1 = self.world_x * 0.0
         probs1 += self.probmessage_cond_a(detections, 0)
         if len(detections) >= 1:
-            probs1 += self.proba * self.probmessage_cond_a(detections, 1)
+            probs1 += self.dog_boxes_probability * self.probmessage_cond_a(detections, 1)
         norm_probs = probs1 / probs1.sum()
         return norm_probs
 
@@ -203,13 +217,13 @@ class Nav(Node):
 
     def publish_vision_debug_image(self, pose_probability_map, header):
         (loc, orientation) = self.get_location_MLE(pose_probability_map)
-        box_tensor = torch.tensor([self.boxes.center.x[loc[0], loc[1], orientation]])
-        score = self.proba[loc[0], loc[1], orientation]
+        box_tensor = torch.tensor([self.dog_boxes.center.x[loc[0], loc[1], orientation]])
+        score = self.dog_boxes_probability[loc[0], loc[1], orientation]
         box = Detection("debug", box_tensor, score)
-        center_x = self.boxes.center.x[loc[0], loc[1], orientation]
-        center_y = self.boxes.center.y[loc[0], loc[1], orientation]
-        width = self.boxes.width[loc[0], loc[1], orientation]
-        height = self.boxes.height[loc[0], loc[1], orientation]
+        center_x = self.dog_boxes.center.x[loc[0], loc[1], orientation]
+        center_y = self.dog_boxes.center.y[loc[0], loc[1], orientation]
+        width = self.dog_boxes.width[loc[0], loc[1], orientation]
+        height = self.dog_boxes.height[loc[0], loc[1], orientation]
         xmin = center_x - width / 2
         xmax = center_x + width / 2
         ymin = center_y - height / 2
@@ -223,10 +237,6 @@ class Nav(Node):
         self.debug_image_publisher.publish(ros2_image_msg)
 
     def detections_callback(self, msg):
-#        self.pose_from_detections_probability_map = self.probmessage(msg.detections)
-#        self.publish_occupancy_grid_msg(self.pose_from_detections_probability_map, msg.header)
-#        self.publish_pose_msg(self.pose_from_detections_probability_map, msg.header)
-#        print("loc")
         self.detections = msg.detections
 
     def pose_callback(self, msg):
