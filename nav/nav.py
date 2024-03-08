@@ -2,6 +2,7 @@ import collections
 import math
 import numpy as np
 import scipy
+import itertools
 
 from vision_msgs.msg import Detection2DArray
 from vision_msgs.msg import BoundingBox2D
@@ -26,7 +27,7 @@ WorldPoint = collections.namedtuple("WorldPoint", "x, y, z")
 WorldObject = collections.namedtuple("WorldObject", "name, centre, bottom_left, bottom_right, top_left, top_right")
 CameraPoint = collections.namedtuple("CameraPoint", "x, y")
 BoundingBoxes = collections.namedtuple("BoundingBoxes", "center, width, height")  # Grid of bounding boxes
-
+ObjectDetection = collections.namedtuple("ObjectDetection", "bounding_boxes, detection_probabilities")
 
 class Nav(Node):
     def __init__(self):
@@ -61,11 +62,11 @@ class Nav(Node):
             WorldPoint(1.5, -0.11, .52)
         )
         self.world_cat = WorldObject("cat",
-                                     WorldPoint(1.5, 0.0, 0.27),
-                                     WorldPoint(1.5, 0.11, .02),
-                                     WorldPoint(1.5, -0.11, .02),
-                                     WorldPoint(1.5, 0.11, .52),
-                                     WorldPoint(1.5, -0.11, .52)
+                                     WorldPoint(-1.5, 0.0, 0.27),
+                                     WorldPoint(-1.5, 0.11, .02),
+                                     WorldPoint(-1.5, -0.11, .02),
+                                     WorldPoint(-1.5, 0.11, .52),
+                                     WorldPoint(-1.5, -0.11, .52)
                                      )
         self.num_grid_cells = 101
         self.num_orientation_cells = 128
@@ -82,8 +83,13 @@ class Nav(Node):
         self.world_thetas = torch.arange(self.num_orientation_cells)*2*math.pi/self.num_orientation_cells
         self.world_x, self.world_y, self.world_theta = torch.meshgrid(self.world_xs, self.world_ys, self.world_thetas, indexing='xy')
 
-        self.dog_boxes = self.world_to_bbox(self.world_dog)
-        self.dog_boxes_probability = self.box_probability(self.dog_boxes)
+        self.world_dog_boxes = self.world_to_bbox(self.world_dog)
+        self.world_cat_boxes = self.world_to_bbox(self.world_cat)
+        self.dog = ObjectDetection(self.world_to_bbox(self.world_dog), self.box_probability(self.world_dog_boxes))
+        self.cat = ObjectDetection( self.world_to_bbox(self.world_cat), self.box_probability(self.world_cat_boxes))
+        self.object_dictionary = {"dog": ObjectDetection(self.world_to_bbox(self.world_dog), self.box_probability(self.world_dog_boxes)),
+            "cat": ObjectDetection(self.world_to_bbox(self.world_cat), self.box_probability(self.world_cat_boxes)) }
+        self.object_list = list(self.object_dictionary.keys())
         self.current_probability_map = \
             torch.zeros([self.num_grid_cells, self.num_grid_cells, self.num_orientation_cells]) \
              + \
@@ -141,7 +147,7 @@ class Nav(Node):
         bounding_boxes = BoundingBoxes(camera_pred_centre, camera_pred_width, camera_pred_height)
         return bounding_boxes
 
-    def prob_map(self, boxes, bbox):
+    def prob_map(self, bbox, boxes):
         scale = 25.0
         res1 = torch.distributions.normal.Normal(boxes.center.x, scale).log_prob(torch.tensor(bbox.center.position.x))
         res2 = torch.distributions.normal.Normal(boxes.width, scale).log_prob(torch.tensor(bbox.size_x))
@@ -153,25 +159,39 @@ class Nav(Node):
         smyprobs = torch.exp(mynorm)
         return smyprobs
 
-    def probmessage_cond_a(self, detections, assignment):
+    def probmessage_cond_a(self, detections_msg, proposals):
+        # detections is Detections list, proposals is list of world_boxes
+        # loop through proposals assign to a detection and recurse
         prob_dist_random = 0.05 * 0.01 * 0.01 * 0.01 * 0.01
         prob_dist_random_boxes = prob_dist_random+(self.world_x*0.0)
-        if assignment == 0:
-            probs = prob_dist_random_boxes**len(detections)
-        else:
-            probs = self.world_x*0.0
-            for m in detections:
-                if m.results[0].hypothesis.class_id == "dog":
-                    probs += prob_dist_random_boxes**(len(detections)-1) * self.prob_map(self.dog_boxes, m.bbox)
-        return probs
+        if proposals == []:
+            return prob_dist_random_boxes**len(detections_msg)
+        proposal, *remaining_proposals = proposals
+        cum_prob = self.world_x * 0.0
+        for assign_idx in range(len(detections_msg)):
+            rem_detections = detections_msg[:assign_idx] + detections_msg[assign_idx+1:]
+            proposal_name = self.object_list[proposal]
+            prob_assignment = self.prob_map(detections_msg[assign_idx].bbox, self.object_dictionary[proposal_name].bounding_boxes)
+            if proposal_name != detections_msg[assign_idx].results[0].hypothesis.class_id:
+                prob_assignment = prob_assignment * 0.0
+            rem_prob = self.probmessage_cond_a(rem_detections, remaining_proposals)
+            total_prob = prob_assignment * rem_prob
+            cum_prob += total_prob / len(detections_msg)
+        return cum_prob
 
-    def probmessage(self, detections):
-        probs1 = self.world_x * 0.0
-        probs1 += self.probmessage_cond_a(detections, 0)
-        if len(detections) >= 1:
-            probs1 += self.dog_boxes_probability * self.probmessage_cond_a(detections, 1)
-        norm_probs = probs1 / probs1.sum()
-        return norm_probs
+    def probmessage(self, detections_msg):
+        comb = list(itertools.product([False,True], repeat=2))
+        s = self.world_x * 0.0
+        for assignment in comb:
+            probs = self.world_x * 0.0 + 1.0
+            for idx in range(len(assignment)):
+                if idx == False:
+                    probs = probs * (1.0-self.object_dictionary[self.object_list[idx]].detection_probabilities)
+                else:
+                    probs = probs * self.object_dictionary[self.object_list[idx]].detection_probabilities
+            assignments = [i for i, x in enumerate(assignment) if x]
+            s += self.probmessage_cond_a(detections_msg, assignments) * probs
+        return s
 
     def publish_occupancy_grid_msg(self, pose_probability_map, header):
         myprobs = torch.sum(pose_probability_map, axis=2)
@@ -216,6 +236,7 @@ class Nav(Node):
         self.annotated_image = image
 
     def publish_vision_debug_image(self, pose_probability_map, header):
+        return
         (loc, orientation) = self.get_location_MLE(pose_probability_map)
         box_tensor = torch.tensor([self.dog_boxes.center.x[loc[0], loc[1], orientation]])
         score = self.dog_boxes_probability[loc[0], loc[1], orientation]
