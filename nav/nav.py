@@ -62,11 +62,11 @@ class Nav(Node):
             WorldPoint(1.5, -0.11, .52)
         )
         self.world_cat = WorldObject("cat",
-                                     WorldPoint(-1.5, 0.0, 0.27),
-                                     WorldPoint(-1.5, 0.11, .02),
-                                     WorldPoint(-1.5, -0.11, .02),
-                                     WorldPoint(-1.5, 0.11, .52),
-                                     WorldPoint(-1.5, -0.11, .52)
+                                     WorldPoint(.5, -1.5, 0.27),
+                                     WorldPoint(.5-.11, 1.5, .02),
+                                     WorldPoint(.5+.11, 1.5, .02),
+                                     WorldPoint(.5-.11, 1.5, .52),
+                                     WorldPoint(.5+.11, 1.5, .52)
                                      )
         self.num_grid_cells = 101
         self.num_orientation_cells = 128
