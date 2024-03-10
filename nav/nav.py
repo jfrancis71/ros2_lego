@@ -90,11 +90,7 @@ class Nav(Node):
         self.object_dictionary = {"dog": ObjectDetection(self.world_to_bbox(self.world_dog), self.box_probability(self.world_dog_boxes)),
             "cat": ObjectDetection(self.world_to_bbox(self.world_cat), self.box_probability(self.world_cat_boxes)) }
         self.object_list = list(self.object_dictionary.keys())
-        self.current_probability_map = \
-            torch.zeros([self.num_grid_cells, self.num_grid_cells, self.num_orientation_cells]) \
-             + \
-            (1.0/(self.num_grid_cells*self.num_grid_cells*self.num_orientation_cells))
-#        self.current_probability_map[int(self.num_grid_cells/2), int(self.num_grid_cells/2), 0] = 1.0
+        self.set_uniform_pose_map()
         self.last_inertial_position = None
         self.position_kernel = np.zeros([11,11])
         self.orientation_kernel = np.zeros([self.num_orientation_cells])
@@ -103,6 +99,19 @@ class Nav(Node):
         self.state = 0
         self.detections = None
         self.bridge = CvBridge()
+
+    def set_uniform_pose_map(self):
+        """current_probability_map is in [height, width, orientation] format
+        where orientation is yaw of robot, positive is counterclockwise seen from above"""
+        self.current_probability_map = \
+            torch.zeros([self.num_grid_cells, self.num_grid_cells, self.num_orientation_cells]) \
+            + \
+            (1.0 / (self.num_grid_cells * self.num_grid_cells * self.num_orientation_cells))
+
+    def set_center_pose_map(self):
+        self.current_probability_map = \
+            torch.zeros([self.num_grid_cells, self.num_grid_cells, self.num_orientation_cells])
+        self.current_probability_map[int(self.num_grid_cells/2), int(self.num_grid_cells/2), 0] = 1.0
 
     def box_probability(self, boxes):
         """Computes the probability of a bounding box being detected.
@@ -260,55 +269,54 @@ class Nav(Node):
     def detections_callback(self, msg):
         self.detections = msg.detections
 
+    def inertial_update(self, last_inertial_position, current_inertial_position, last_inertial_orientation, current_inertial_orientation):
+        s = self.world_x * 0.0
+        inertial_position_difference = current_inertial_position - last_inertial_position
+        inertial_orientation_difference = (current_inertial_orientation - last_inertial_orientation)
+        tensor_orientation = torch.tensor(current_inertial_orientation)
+        inertial_forward = torch.inner(torch.stack([tensor_orientation.cos(), tensor_orientation.sin()]), inertial_position_difference)
+        for r in range(self.num_orientation_cells):
+            shifted = scipy.ndimage.shift(self.position_kernel, (0.0, -inertial_forward/self.world_cell_size), output=None, order=3, mode='constant', cval=0.0, prefilter=True)
+            rotated = scipy.ndimage.rotate(shifted, 360 * r/self.num_orientation_cells, reshape=False)
+            s[:,:,r] = torch.nn.functional.conv2d(self.current_probability_map[:,:,r:r+1].permute([2,0,1]), torch.tensor(rotated, dtype=torch.float).reshape([1,1,11,11]), padding="same").permute([1,2,0])[:,:,0]
+        s = torch.tensor(
+            scipy.ndimage.shift(s, (0,0, inertial_orientation_difference * self.num_orientation_cells/ (2*3.141)), mode='wrap'),
+            dtype=torch.float)
+        if inertial_position_difference.norm() > .001 or abs(inertial_orientation_difference) > .001:
+            return True, s
+        else:
+            return False, s
+
     def pose_callback(self, msg):
         if self.detections is None:
             return
         print("POSE", msg.pose.pose.position)
         current_inertial_position = torch.tensor([msg.pose.pose.position.x, msg.pose.pose.position.y])
         q = msg.pose.pose.orientation
-
-        current_inertial_orientation = -euler_from_quaternion((q.x, q.y, q.z, q.w))[2]
-        print("o=", current_inertial_orientation)
+        current_inertial_orientation = euler_from_quaternion((q.x, q.y, q.z, q.w))[2]
+        pose_from_detections_probability_map = self.probmessage(self.detections)
         if self.last_inertial_position is None:
+            self.set_center_pose_map()
             self.last_inertial_position = current_inertial_position
             self.last_inertial_orientation = current_inertial_orientation
+            self.current_probability_map = pose_from_detections_probability_map
             return
-        inertial_position_difference = self.last_inertial_position - current_inertial_position
-        inertial_orientation_difference = self.last_inertial_orientation - current_inertial_orientation
-        tensor_orientation = torch.tensor(current_inertial_orientation)
-        inertial_forward = torch.inner(torch.stack([tensor_orientation.cos(), tensor_orientation.sin()]), inertial_position_difference)
+        moving, inertial_update_probability_map = self.inertial_update(self.last_inertial_position, current_inertial_position, self.last_inertial_orientation, current_inertial_orientation)
         self.last_inertial_position = current_inertial_position
         self.last_inertial_orientation = current_inertial_orientation
-        for r in range(self.num_orientation_cells):
-            shifted = scipy.ndimage.shift(self.position_kernel, (0.0, inertial_forward/self.world_cell_size), output=None, order=3, mode='constant', cval=0.0, prefilter=True)
-            rotated = scipy.ndimage.rotate(shifted, -360 * r/self.num_orientation_cells, reshape=False)
-            self.current_probability_map[:,:,r] = torch.nn.functional.conv2d(self.current_probability_map[:,:,r:r+1].permute([2,0,1]), torch.tensor(rotated, dtype=torch.float).reshape([1,1,11,11]), padding="same").permute([1,2,0])[:,:,0]
-        #    shifted_orientation = scipy.ndimage.shift(self.orientation_kernel, inertial_orientation_difference * self.num_orientation_cells/ (2*3.141),
-        #                                 output=None, order=3, mode='wrap', cval=0.0, prefilter=True)
-
-        self.current_probability_map = torch.tensor(
-            scipy.ndimage.shift(self.current_probability_map, (0,0, inertial_orientation_difference * self.num_orientation_cells/ (2*3.141)), mode='wrap'),
-            dtype=torch.float)
-
-        #self.current_probability_map = torch.nn.functional.conv2d(
-        #    self.current_probability_map.permute([2,0,1]).reshape([1,self.num_orientation_cells, self.num_grid_cells, self.num_grid_cells]),
-        #    torch.tensor(shifted_orientation, dtype=torch.float).reshape([1, self.num_orientation_cells, 1, 1]))
-        # rescale
-        self.current_probability_map = torch.clip(self.current_probability_map, min=0.0)
-        self.current_probability_map = self.current_probability_map / self.current_probability_map.sum()
-        pose_from_detections_probability_map = self.probmessage(self.detections)
-        if inertial_position_difference.norm() > .001 or abs(inertial_orientation_difference) > .001:
+        if moving:
             print("Moving")
+            self.current_probability_map = inertial_update_probability_map
             self.state = 0
         else:
-            if self.state == 0 and self.detections is not None:
-
+            if self.state == 0:
                 self.publish_vision_debug_image(pose_from_detections_probability_map, msg.header)
-                self.current_probability_map = self.current_probability_map * pose_from_detections_probability_map
+                self.current_probability_map = inertial_update_probability_map * pose_from_detections_probability_map
 #                self.current_probability_map = pose_from_detections_probability_map
-                self.current_probability_map = self.current_probability_map / self.current_probability_map.sum()
+#                self.current_probability_map = self.current_probability_map / self.current_probability_map.sum()
                 self.state = 1
-#        self.current_probability_map = pose_from_detections_probability_map
+        self.current_probability_map = torch.clip(self.current_probability_map, min=0.0)
+        self.current_probability_map = self.current_probability_map / self.current_probability_map.sum()
         header = msg.header
         self.publish_occupancy_grid_msg(self.current_probability_map, header)
         self.publish_pose_msg(self.current_probability_map, header)
