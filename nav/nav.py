@@ -29,6 +29,58 @@ CameraPoint = collections.namedtuple("CameraPoint", "x, y")
 BoundingBoxes = collections.namedtuple("BoundingBoxes", "center, width, height")  # Grid of bounding boxes
 ObjectDetection = collections.namedtuple("ObjectDetection", "bounding_boxes, detection_probabilities")
 
+
+class InertialNav():
+    def __init__(self, num_grid_cells, num_orientation_cells, init):
+        self.num_grid_cells = num_grid_cells
+        self.num_orientation_cells = num_orientation_cells
+        if init=="Uniform":
+            self.current_probability_map = \
+                torch.zeros([self.num_grid_cells, self.num_grid_cells, self.num_orientation_cells]) \
+                    + \
+                (1.0 / (self.num_grid_cells * self.num_grid_cells * self.num_orientation_cells))
+        else:
+            if init=="Origin":
+                self.current_probability_map = \
+                    torch.zeros([self.num_grid_cells, self.num_grid_cells, self.num_orientation_cells])
+                self.current_probability_map[int(self.num_grid_cells/2), int(self.num_grid_cells/2), 0] = 1.0
+            else:
+                raise("Unknown init")
+        self.position_kernel = np.zeros([11,11])
+        self.orientation_kernel = np.zeros([self.num_orientation_cells])
+        self.position_kernel[5,5] = 1.0
+        self.orientation_kernel[0] = 1.0
+        self.world_grid_length = 3.0
+        self.world_cell_size = self.world_grid_length/self.num_grid_cells
+
+    def inertial_update(self, last_inertial_position, current_inertial_position, last_inertial_orientation, current_inertial_orientation):
+        s = self.current_probability_map * 0.0
+        inertial_position_difference = current_inertial_position - last_inertial_position
+        inertial_orientation_difference = (current_inertial_orientation - last_inertial_orientation)
+        tensor_orientation = torch.tensor(current_inertial_orientation)
+        inertial_forward = torch.inner(torch.stack([tensor_orientation.cos(), tensor_orientation.sin()]), inertial_position_difference)
+        for r in range(self.num_orientation_cells):
+            shifted = scipy.ndimage.shift(self.position_kernel, (0.0, -inertial_forward/self.world_cell_size), output=None, order=3, mode='constant', cval=0.0, prefilter=True)
+            rotated = scipy.ndimage.rotate(shifted, 360 * r/self.num_orientation_cells, reshape=False)
+            s[:,:,r] = torch.nn.functional.conv2d(self.current_probability_map[:,:,r:r+1].permute([2,0,1]), torch.tensor(rotated, dtype=torch.float).reshape([1,1,11,11]), padding="same").permute([1,2,0])[:,:,0]
+        s = torch.tensor(
+            scipy.ndimage.shift(s, (0,0, inertial_orientation_difference * self.num_orientation_cells/ (2*3.141)), mode='wrap'),
+            dtype=torch.float)
+        self.current_probability_map = s
+        self.current_probability_map = torch.clip(self.current_probability_map, min=0.0)
+        self.current_probability_map = self.current_probability_map / self.current_probability_map.sum()
+        if inertial_position_difference.norm() > .001 or abs(inertial_orientation_difference) > .001:
+            return True
+        else:
+            return False
+
+    def update_from_sensor(self, update_from_sensor):
+        self.current_probability_map *= update_from_sensor
+        self.current_probability_map = torch.clip(self.current_probability_map, min=0.0)
+        self.current_probability_map = self.current_probability_map / self.current_probability_map.sum()
+
+
+
 class Nav(Node):
     def __init__(self):
         super().__init__("nav")
@@ -70,11 +122,10 @@ class Nav(Node):
                                      )
         self.num_grid_cells = 101
         self.num_orientation_cells = 128
-        self.world_grid_length = 3.0
-        self.world_cell_size = self.world_grid_length/self.num_grid_cells
         self.grid_cells_origin_x = -1.5
         self.grid_cells_origin_y = -1.5
-
+        self.world_grid_length = 3.0
+        self.world_cell_size = self.world_grid_length/self.num_grid_cells
         self.world_z = .24
 
         self.world_position = (torch.arange(self.num_grid_cells)+0.5) * self.world_cell_size - self.world_grid_length/2.0
@@ -90,28 +141,11 @@ class Nav(Node):
         self.object_dictionary = {"dog": ObjectDetection(self.world_to_bbox(self.world_dog), self.box_probability(self.world_dog_boxes)),
             "cat": ObjectDetection(self.world_to_bbox(self.world_cat), self.box_probability(self.world_cat_boxes)) }
         self.object_list = list(self.object_dictionary.keys())
-        self.set_uniform_pose_map()
         self.last_inertial_position = None
-        self.position_kernel = np.zeros([11,11])
-        self.orientation_kernel = np.zeros([self.num_orientation_cells])
-        self.position_kernel[5,5] = 1.0
-        self.orientation_kernel[0] = 1.0
         self.state = 0
         self.detections = None
         self.bridge = CvBridge()
-
-    def set_uniform_pose_map(self):
-        """current_probability_map is in [height, width, orientation] format
-        where orientation is yaw of robot, positive is counterclockwise seen from above"""
-        self.current_probability_map = \
-            torch.zeros([self.num_grid_cells, self.num_grid_cells, self.num_orientation_cells]) \
-            + \
-            (1.0 / (self.num_grid_cells * self.num_grid_cells * self.num_orientation_cells))
-
-    def set_center_pose_map(self):
-        self.current_probability_map = \
-            torch.zeros([self.num_grid_cells, self.num_grid_cells, self.num_orientation_cells])
-        self.current_probability_map[int(self.num_grid_cells/2), int(self.num_grid_cells/2), 0] = 1.0
+        self.inertial_nav = InertialNav(self.num_grid_cells, self.num_orientation_cells, "Uniform")
 
     def box_probability(self, boxes):
         """Computes the probability of a bounding box being detected.
@@ -269,24 +303,6 @@ class Nav(Node):
     def detections_callback(self, msg):
         self.detections = msg.detections
 
-    def inertial_update(self, last_inertial_position, current_inertial_position, last_inertial_orientation, current_inertial_orientation):
-        s = self.world_x * 0.0
-        inertial_position_difference = current_inertial_position - last_inertial_position
-        inertial_orientation_difference = (current_inertial_orientation - last_inertial_orientation)
-        tensor_orientation = torch.tensor(current_inertial_orientation)
-        inertial_forward = torch.inner(torch.stack([tensor_orientation.cos(), tensor_orientation.sin()]), inertial_position_difference)
-        for r in range(self.num_orientation_cells):
-            shifted = scipy.ndimage.shift(self.position_kernel, (0.0, -inertial_forward/self.world_cell_size), output=None, order=3, mode='constant', cval=0.0, prefilter=True)
-            rotated = scipy.ndimage.rotate(shifted, 360 * r/self.num_orientation_cells, reshape=False)
-            s[:,:,r] = torch.nn.functional.conv2d(self.current_probability_map[:,:,r:r+1].permute([2,0,1]), torch.tensor(rotated, dtype=torch.float).reshape([1,1,11,11]), padding="same").permute([1,2,0])[:,:,0]
-        s = torch.tensor(
-            scipy.ndimage.shift(s, (0,0, inertial_orientation_difference * self.num_orientation_cells/ (2*3.141)), mode='wrap'),
-            dtype=torch.float)
-        if inertial_position_difference.norm() > .001 or abs(inertial_orientation_difference) > .001:
-            return True, s
-        else:
-            return False, s
-
     def pose_callback(self, msg):
         if self.detections is None:
             return
@@ -296,30 +312,24 @@ class Nav(Node):
         current_inertial_orientation = euler_from_quaternion((q.x, q.y, q.z, q.w))[2]
         pose_from_detections_probability_map = self.probmessage(self.detections)
         if self.last_inertial_position is None:
-            self.set_center_pose_map()
             self.last_inertial_position = current_inertial_position
             self.last_inertial_orientation = current_inertial_orientation
-            self.current_probability_map = pose_from_detections_probability_map
+            self.inertial_nav.current_probability_map = pose_from_detections_probability_map
             return
-        moving, inertial_update_probability_map = self.inertial_update(self.last_inertial_position, current_inertial_position, self.last_inertial_orientation, current_inertial_orientation)
+        moving = self.inertial_nav.inertial_update(self.last_inertial_position, current_inertial_position, self.last_inertial_orientation, current_inertial_orientation)
         self.last_inertial_position = current_inertial_position
         self.last_inertial_orientation = current_inertial_orientation
         if moving:
             print("Moving")
-            self.current_probability_map = inertial_update_probability_map
             self.state = 0
         else:
             if self.state == 0:
                 self.publish_vision_debug_image(pose_from_detections_probability_map, msg.header)
-                self.current_probability_map = inertial_update_probability_map * pose_from_detections_probability_map
-#                self.current_probability_map = pose_from_detections_probability_map
-#                self.current_probability_map = self.current_probability_map / self.current_probability_map.sum()
+                self.inertial_nav.update_from_sensor(pose_from_detections_probability_map)
                 self.state = 1
-        self.current_probability_map = torch.clip(self.current_probability_map, min=0.0)
-        self.current_probability_map = self.current_probability_map / self.current_probability_map.sum()
         header = msg.header
-        self.publish_occupancy_grid_msg(self.current_probability_map, header)
-        self.publish_pose_msg(self.current_probability_map, header)
+        self.publish_occupancy_grid_msg(self.inertial_nav.current_probability_map, header)
+        self.publish_pose_msg(self.inertial_nav.current_probability_map, header)
 
 
 def test1(node):
