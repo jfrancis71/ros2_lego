@@ -31,34 +31,8 @@ BoundingBoxes = collections.namedtuple("BoundingBoxes", "center, width, height")
 ObjectDetection = collections.namedtuple("ObjectDetection", "bounding_boxes, detection_probabilities")
 
 
-
-
-
-class Nav(Node):
-    def __init__(self):
-        super().__init__("nav")
-        self.detections_subscription = self.create_subscription(
-            Detection2DArray,
-            "/detected_objects",
-            self.detections_callback,
-            10)
-        self.annotated_image_subscription = self.create_subscription(
-            Image,
-            "/annotated_image",
-            self.annotated_image_callback,
-            10)
-        self.pose_subscription = self.create_subscription(
-            Odometry,
-            "/differential_drive_controller/odom",
-            self.pose_callback,
-            10)
-        self.probmap_publisher = \
-            self.create_publisher(OccupancyGrid, "probmap", 10)
-        self.pose_publisher = \
-            self.create_publisher(PoseStamped, "nav_pose", 10)
-        self.debug_image_publisher = \
-            self.create_publisher(Image, "debug_image", 10)
-
+class PoseNav():
+    def __init__(self, num_grid_cells, num_orientation_cells):
         self.world_dog = WorldObject("dog",
             WorldPoint(1.5, 0.0, 0.27),
             WorldPoint(1.5, 0.11, .02),
@@ -73,10 +47,9 @@ class Nav(Node):
                                      WorldPoint(.5-.11, 1.5, .52),
                                      WorldPoint(.5+.11, 1.5, .52)
                                      )
-        self.num_grid_cells = 101
-        self.num_orientation_cells = 128
-        self.grid_cells_origin_x = -1.5
-        self.grid_cells_origin_y = -1.5
+        self.num_grid_cells = num_grid_cells
+        self.num_orientation_cells = num_orientation_cells
+
         self.world_grid_length = 3.0
         self.world_cell_size = self.world_grid_length/self.num_grid_cells
         self.world_z = .24
@@ -94,54 +67,6 @@ class Nav(Node):
         self.object_dictionary = {"dog": ObjectDetection(self.world_to_bbox(self.world_dog), self.box_probability(self.world_dog_boxes)),
             "cat": ObjectDetection(self.world_to_bbox(self.world_cat), self.box_probability(self.world_cat_boxes)) }
         self.object_list = list(self.object_dictionary.keys())
-        self.last_inertial_position = None
-        self.state = 0
-        self.detections = None
-        self.bridge = CvBridge()
-        self.inertial_nav = inertial_nav_mod.InertialNav(self.num_grid_cells, self.num_orientation_cells, "Uniform")
-
-    def box_probability(self, boxes):
-        """Computes the probability of a bounding box being detected.
-        Example: If the bounding box is completely outside the camera field of view, it won't be detected.
-        """
-        cons_camera_left_x = torch.clip(boxes.center.x - boxes.width, min=-160, max=+160)
-        cons_camera_right_x = torch.clip(boxes.center.x + boxes.width, min=-160, max=+160)
-        cons_camera_bottom_y = torch.clip(boxes.center.y - boxes.height, min=-120, max=+120)
-        cons_camera_top_y = torch.clip(boxes.center.y + boxes.height, min=-120, max=+120)
-        cons_area = (cons_camera_right_x-cons_camera_left_x)*(cons_camera_top_y-cons_camera_bottom_y)
-        area_ratio = cons_area / ((boxes.width*boxes.height)+cons_area)
-        area_ratio = torch.nan_to_num(area_ratio, nan=0.0)
-        return 0.05 * (1-area_ratio) + 0.95 * area_ratio
-
-
-    def world_to_camera(self, world_point):
-        world_translate_x = world_point.x - self.world_x
-        world_translate_y = world_point.y - self.world_y
-        world_translate_z = world_point.z - self.world_z
-        world_rotate_x = torch.sin(self.world_theta) * world_translate_y + torch.cos(
-            self.world_theta) * world_translate_x
-        world_rotate_y = torch.cos(self.world_theta) * world_translate_y - torch.sin(
-            self.world_theta) * world_translate_x
-        world_rotate_z = world_translate_z
-        camera_pred_x = 160 + f_x * (-world_rotate_y) / (world_rotate_x)
-        camera_pred_y = 120 + f_y * -(world_rotate_z) / (world_rotate_x)  # using image coords y=0 means top
-        return CameraPoint(camera_pred_x, camera_pred_y)
-
-    def world_to_bbox(self, world_object):
-        camera_pred_centre = self.world_to_camera(world_object.centre)
-        camera_pred_top_left = self.world_to_camera(world_object.top_left)
-        camera_pred_top_right = self.world_to_camera(world_object.top_right)
-        camera_pred_bottom_left = self.world_to_camera(world_object.bottom_left)
-        camera_pred_bottom_right = self.world_to_camera(world_object.bottom_right)
-
-        pred_left = (camera_pred_bottom_left.x + camera_pred_top_left.x)/2
-        pred_right = (camera_pred_bottom_right.x + camera_pred_top_right.x)/2
-        pred_top = (camera_pred_top_left.y + camera_pred_top_right.y)/2
-        pred_bottom = (camera_pred_bottom_left.y + camera_pred_bottom_right.y) / 2
-        camera_pred_width = torch.clip(pred_right - pred_left, min=0.0)
-        camera_pred_height = torch.clip(pred_bottom - pred_top, min=0.0)
-        bounding_boxes = BoundingBoxes(camera_pred_centre, camera_pred_width, camera_pred_height)
-        return bounding_boxes
 
     def prob_map(self, bbox, boxes):
         scale = 25.0
@@ -188,6 +113,90 @@ class Nav(Node):
             assignments = [i for i, x in enumerate(assignment) if x]
             s += self.probmessage_cond_a(detections_msg, assignments) * probs
         return s
+
+    def box_probability(self, boxes):
+        """Computes the probability of a bounding box being detected.
+        Example: If the bounding box is completely outside the camera field of view, it won't be detected.
+        """
+        cons_camera_left_x = torch.clip(boxes.center.x - boxes.width, min=-160, max=+160)
+        cons_camera_right_x = torch.clip(boxes.center.x + boxes.width, min=-160, max=+160)
+        cons_camera_bottom_y = torch.clip(boxes.center.y - boxes.height, min=-120, max=+120)
+        cons_camera_top_y = torch.clip(boxes.center.y + boxes.height, min=-120, max=+120)
+        cons_area = (cons_camera_right_x-cons_camera_left_x)*(cons_camera_top_y-cons_camera_bottom_y)
+        area_ratio = cons_area / ((boxes.width*boxes.height)+cons_area)
+        area_ratio = torch.nan_to_num(area_ratio, nan=0.0)
+        return 0.05 * (1-area_ratio) + 0.95 * area_ratio
+
+
+    def world_to_camera(self, world_point):
+        world_translate_x = world_point.x - self.world_x
+        world_translate_y = world_point.y - self.world_y
+        world_translate_z = world_point.z - self.world_z
+        world_rotate_x = torch.sin(self.world_theta) * world_translate_y + torch.cos(
+            self.world_theta) * world_translate_x
+        world_rotate_y = torch.cos(self.world_theta) * world_translate_y - torch.sin(
+            self.world_theta) * world_translate_x
+        world_rotate_z = world_translate_z
+        camera_pred_x = 160 + f_x * (-world_rotate_y) / (world_rotate_x)
+        camera_pred_y = 120 + f_y * -(world_rotate_z) / (world_rotate_x)  # using image coords y=0 means top
+        return CameraPoint(camera_pred_x, camera_pred_y)
+
+    def world_to_bbox(self, world_object):
+        camera_pred_centre = self.world_to_camera(world_object.centre)
+        camera_pred_top_left = self.world_to_camera(world_object.top_left)
+        camera_pred_top_right = self.world_to_camera(world_object.top_right)
+        camera_pred_bottom_left = self.world_to_camera(world_object.bottom_left)
+        camera_pred_bottom_right = self.world_to_camera(world_object.bottom_right)
+
+        pred_left = (camera_pred_bottom_left.x + camera_pred_top_left.x)/2
+        pred_right = (camera_pred_bottom_right.x + camera_pred_top_right.x)/2
+        pred_top = (camera_pred_top_left.y + camera_pred_top_right.y)/2
+        pred_bottom = (camera_pred_bottom_left.y + camera_pred_bottom_right.y) / 2
+        camera_pred_width = torch.clip(pred_right - pred_left, min=0.0)
+        camera_pred_height = torch.clip(pred_bottom - pred_top, min=0.0)
+        bounding_boxes = BoundingBoxes(camera_pred_centre, camera_pred_width, camera_pred_height)
+        return bounding_boxes
+
+
+class Nav(Node):
+    def __init__(self):
+        super().__init__("nav")
+        self.detections_subscription = self.create_subscription(
+            Detection2DArray,
+            "/detected_objects",
+            self.detections_callback,
+            10)
+        self.annotated_image_subscription = self.create_subscription(
+            Image,
+            "/annotated_image",
+            self.annotated_image_callback,
+            10)
+        self.pose_subscription = self.create_subscription(
+            Odometry,
+            "/differential_drive_controller/odom",
+            self.pose_callback,
+            10)
+        self.probmap_publisher = \
+            self.create_publisher(OccupancyGrid, "probmap", 10)
+        self.pose_publisher = \
+            self.create_publisher(PoseStamped, "nav_pose", 10)
+        self.debug_image_publisher = \
+            self.create_publisher(Image, "debug_image", 10)
+
+        self.num_grid_cells = 101
+        self.num_orientation_cells = 128
+        self.grid_cells_origin_x = -1.5
+        self.grid_cells_origin_y = -1.5
+        self.world_grid_length = 3.0
+        self.world_cell_size = self.world_grid_length/self.num_grid_cells
+        self.last_inertial_position = None
+        self.state = 0
+        self.detections = None
+        self.bridge = CvBridge()
+        self.inertial_nav = inertial_nav_mod.InertialNav(self.num_grid_cells, self.num_orientation_cells, "Uniform")
+        self.pose_nav = PoseNav(self.num_grid_cells, self.num_orientation_cells)
+
+
 
     def publish_occupancy_grid_msg(self, pose_probability_map, header):
         myprobs = torch.sum(pose_probability_map, axis=2)
@@ -263,7 +272,7 @@ class Nav(Node):
         current_inertial_position = torch.tensor([msg.pose.pose.position.x, msg.pose.pose.position.y])
         q = msg.pose.pose.orientation
         current_inertial_orientation = euler_from_quaternion((q.x, q.y, q.z, q.w))[2]
-        pose_from_detections_probability_map = self.probmessage(self.detections)
+        pose_from_detections_probability_map = self.pose_nav.probmessage(self.detections)
         if self.last_inertial_position is None:
             self.last_inertial_position = current_inertial_position
             self.last_inertial_orientation = current_inertial_orientation
