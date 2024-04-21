@@ -24,7 +24,7 @@ from geometry_msgs.msg import TransformStamped
 
 Detection = collections.namedtuple("Detection", "label, bbox, score")
 
-
+torch.set_num_threads(1)
 
 
 
@@ -32,6 +32,7 @@ Detection = collections.namedtuple("Detection", "label, bbox, score")
 class Nav(Node):
     def __init__(self):
         super().__init__("nav")
+        self.stationary, self.stopped, self.moving = range(3)
         self.detections_subscription = self.create_subscription(
             Detection2DArray,
             "/detected_objects",
@@ -45,7 +46,7 @@ class Nav(Node):
         self.pose_subscription = self.create_subscription(
             Odometry,
             "/differential_drive_controller/odom",
-            self.pose_callback,
+            self.odometry_callback,
             10)
         self.probmap_publisher = \
             self.create_publisher(OccupancyGrid, "probmap", 10)
@@ -55,13 +56,14 @@ class Nav(Node):
             self.create_publisher(Image, "debug_image", 10)
 
         self.num_grid_cells = 101
-        self.num_orientation_cells = 128
+        self.num_orientation_cells = 64
         self.grid_cells_origin_x = -1.5
         self.grid_cells_origin_y = -1.5
         self.world_grid_length = 3.0
         self.world_cell_size = self.world_grid_length/self.num_grid_cells
         self.last_inertial_position = None
-        self.state = 0
+        self.annotated_image = None
+        self.state = self.stopped
         self.detections = None
         self.bridge = CvBridge()
         self.inertial_nav = inertial_nav_mod.InertialNav(self.num_grid_cells, self.num_orientation_cells, "Uniform")
@@ -126,11 +128,12 @@ class Nav(Node):
         self.publish_pose_msg1(pose_probability_map, header)
 
     def annotated_image_callback(self, msg):
+        print("Other callback")
         cv_image = self.bridge.imgmsg_to_cv2(msg, desired_encoding="rgb8")
         image = cv_image.copy().transpose((2, 0, 1))
         self.annotated_image = image
 
-    def publish_vision_debug_image(self, pose_probability_map, header):
+    def publish_vision_debug_image(self, pose_probability_map, detections, header):
 #        return
         (loc, orientation) = self.get_location_MLE(pose_probability_map)
         boxes = []
@@ -158,42 +161,50 @@ class Nav(Node):
             debug_image = draw_bounding_boxes(torch.tensor(self.annotated_image), tensor_boxes,
                                               labels, colors="green")
         else:
+            if self.annotated_image is None:
+                return
             debug_image = torch.tensor(self.annotated_image)
+
         ros2_image_msg = self.bridge.cv2_to_imgmsg(debug_image.numpy().transpose(1, 2, 0), encoding = "rgb8")
         ros2_image_msg.header = header
         self.debug_image_publisher.publish(ros2_image_msg)
 
     def detections_callback(self, msg):
-        self.detections = msg.detections
+        print("callback")
+        if self.state == self.stopped:
+            pose_from_detections_probability_map = self.vision_nav.probmessage(msg.detections)
+            self.inertial_nav.update_from_sensor(pose_from_detections_probability_map)
+            if self.annotated_image is not None:
+                self.publish_vision_debug_image(pose_from_detections_probability_map, msg.detections, msg.header)
+            self.state = self.stationary
 
-    def pose_callback(self, msg):
-        if self.detections is None:
-            return
+    def odometry_callback(self, msg):
+#        if self.detections is None:
+#            return
         print("POSE", msg.pose.pose.position)
         current_inertial_position = torch.tensor([msg.pose.pose.position.x, msg.pose.pose.position.y])
         q = msg.pose.pose.orientation
         current_inertial_orientation = euler_from_quaternion((q.x, q.y, q.z, q.w))[2]
-        pose_from_detections_probability_map = self.vision_nav.probmessage(self.detections)
+        print("Current IO=", current_inertial_orientation)
+
         if self.last_inertial_position is None:
             self.last_inertial_position = current_inertial_position
             self.last_inertial_orientation = current_inertial_orientation
-            self.inertial_nav.current_probability_map = pose_from_detections_probability_map
             return
         moving = self.inertial_nav.inertial_update(self.last_inertial_position, current_inertial_position, self.last_inertial_orientation, current_inertial_orientation)
         self.last_inertial_position = current_inertial_position
         self.last_inertial_orientation = current_inertial_orientation
         if moving:
             print("Moving")
-            self.state = 0
+            self.state = self.moving
         else:
-            if self.state == 0:
-
-                self.inertial_nav.update_from_sensor(pose_from_detections_probability_map)
-                self.state = 1
+            if self.state == self.moving:
+                self.state = self.stopped
         header = msg.header
-        self.publish_vision_debug_image(pose_from_detections_probability_map, msg.header)
-        self.publish_occupancy_grid_msg(self.inertial_nav.current_probability_map, header)
-        self.publish_pose_msg(self.inertial_nav.current_probability_map, header)
+
+        pmap = self.inertial_nav.getpmap()
+        self.publish_occupancy_grid_msg(pmap, header)
+        self.publish_pose_msg(pmap, header)
 
 
 def test1(node):

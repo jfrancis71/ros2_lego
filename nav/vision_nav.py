@@ -33,7 +33,7 @@ class VisionNav():
 
         self.world_grid_length = 3.0
         self.world_cell_size = self.world_grid_length/self.num_grid_cells
-        self.world_z = .24
+        self.world_z = .22
 
         self.world_position = (torch.arange(self.num_grid_cells)+0.5) * self.world_cell_size - self.world_grid_length/2.0
         self.world_xs = self.world_position
@@ -82,6 +82,10 @@ class VisionNav():
         return cum_prob
 
     def probmessage(self, detections_msg):
+        if detections_msg is None:
+            return torch.zeros([self.num_grid_cells, self.num_grid_cells, self.num_orientation_cells]) \
+                    + \
+                (1.0 / (self.num_grid_cells * self.num_grid_cells * self.num_orientation_cells))
         comb = list(itertools.product([False,True], repeat=2))
         s = self.world_x * 0.0
         for assignment in comb:
