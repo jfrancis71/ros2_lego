@@ -71,7 +71,6 @@ class VisionNav(Node):
         self.annotated_image_publisher = \
             self.create_publisher(Image, "annotated_image", 10)
 
-
     def prob_map(self, bbox, boxes):
         scale = 25.0
         res1 = torch.distributions.normal.Normal(boxes.center.x, scale).log_prob(torch.tensor(bbox.center.position.x))
@@ -103,6 +102,63 @@ class VisionNav(Node):
             total_prob = prob_assignment * rem_prob
             cum_prob += total_prob / len(detections_msg)
         return cum_prob
+
+    def probmessage(self, image, header):
+        detections, annotated_image = self.detect_image(image, header)
+        comb = list(itertools.product([False,True], repeat=2))
+        s = self.world_x * 0.0
+        for assignment in comb:
+            probs = self.world_x * 0.0 + 1.0
+            for idx in range(len(assignment)):
+                if idx == False:
+                    probs = probs * (1.0-self.object_dictionary[self.object_list[idx]].detection_probabilities)
+                else:
+                    probs = probs * self.object_dictionary[self.object_list[idx]].detection_probabilities
+            assignments = [i for i, x in enumerate(assignment) if x]
+            s += self.probmessage_cond_a(detections, assignments) * probs
+        return s, annotated_image
+
+    def box_probability(self, boxes):
+        """Computes the probability of a bounding box being detected.
+        Example: If the bounding box is completely outside the camera field of view, it won't be detected.
+        """
+        cons_camera_left_x = torch.clip(boxes.center.x - boxes.width, min=-160, max=+160)
+        cons_camera_right_x = torch.clip(boxes.center.x + boxes.width, min=-160, max=+160)
+        cons_camera_bottom_y = torch.clip(boxes.center.y - boxes.height, min=-120, max=+120)
+        cons_camera_top_y = torch.clip(boxes.center.y + boxes.height, min=-120, max=+120)
+        cons_area = (cons_camera_right_x-cons_camera_left_x)*(cons_camera_top_y-cons_camera_bottom_y)
+        area_ratio = cons_area / ((boxes.width*boxes.height)+cons_area)
+        area_ratio = torch.nan_to_num(area_ratio, nan=0.0)
+        return 0.05 * (1-area_ratio) + 0.95 * area_ratio
+
+    def world_to_camera(self, world_point):
+        world_translate_x = world_point.x - self.world_x
+        world_translate_y = world_point.y - self.world_y
+        world_translate_z = world_point.z - self.world_z
+        world_rotate_x = torch.sin(self.world_theta) * world_translate_y + torch.cos(
+            self.world_theta) * world_translate_x
+        world_rotate_y = torch.cos(self.world_theta) * world_translate_y - torch.sin(
+            self.world_theta) * world_translate_x
+        world_rotate_z = world_translate_z
+        camera_pred_x = 160 + f_x * (-world_rotate_y) / (world_rotate_x)
+        camera_pred_y = 120 + f_y * -(world_rotate_z) / (world_rotate_x)  # using image coords y=0 means top
+        return CameraPoint(camera_pred_x, camera_pred_y)
+
+    def world_to_bbox(self, world_object):
+        camera_pred_centre = self.world_to_camera(world_object.centre)
+        camera_pred_top_left = self.world_to_camera(world_object.top_left)
+        camera_pred_top_right = self.world_to_camera(world_object.top_right)
+        camera_pred_bottom_left = self.world_to_camera(world_object.bottom_left)
+        camera_pred_bottom_right = self.world_to_camera(world_object.bottom_right)
+
+        pred_left = (camera_pred_bottom_left.x + camera_pred_top_left.x)/2
+        pred_right = (camera_pred_bottom_right.x + camera_pred_top_right.x)/2
+        pred_top = (camera_pred_top_left.y + camera_pred_top_right.y)/2
+        pred_bottom = (camera_pred_bottom_left.y + camera_pred_bottom_right.y) / 2
+        camera_pred_width = torch.clip(pred_right - pred_left, min=0.0)
+        camera_pred_height = torch.clip(pred_bottom - pred_top, min=0.0)
+        bounding_boxes = BoundingBoxes(camera_pred_centre, camera_pred_width, camera_pred_height)
+        return bounding_boxes
 
     def publish_annotated_image(self, filtered_detections, header, image):
         """Draws the bounding boxes on the image and publishes to /annotated_image"""
@@ -140,21 +196,6 @@ class VisionNav(Node):
             [self.mobilenet_to_ros2(detection, header) for detection in filtered_detections]
         return detections, annotated_image
 
-    def probmessage(self, image, header):
-        detections, annotated_image = self.detect_image(image, header)
-        comb = list(itertools.product([False,True], repeat=2))
-        s = self.world_x * 0.0
-        for assignment in comb:
-            probs = self.world_x * 0.0 + 1.0
-            for idx in range(len(assignment)):
-                if idx == False:
-                    probs = probs * (1.0-self.object_dictionary[self.object_list[idx]].detection_probabilities)
-                else:
-                    probs = probs * self.object_dictionary[self.object_list[idx]].detection_probabilities
-            assignments = [i for i, x in enumerate(assignment) if x]
-            s += self.probmessage_cond_a(detections, assignments) * probs
-        return s, annotated_image
-
     def mobilenet_to_ros2(self, detection, header):
         """Converts a Detection tuple(label, bbox, score) to a ROS2 Detection2D message."""
 
@@ -174,46 +215,3 @@ class VisionNav(Node):
         bounding_box.size_y = float(2 * (bounding_box.center.position.y - detection.bbox[1]))
         detection2d.bbox = bounding_box
         return detection2d
-
-    def box_probability(self, boxes):
-        """Computes the probability of a bounding box being detected.
-        Example: If the bounding box is completely outside the camera field of view, it won't be detected.
-        """
-        cons_camera_left_x = torch.clip(boxes.center.x - boxes.width, min=-160, max=+160)
-        cons_camera_right_x = torch.clip(boxes.center.x + boxes.width, min=-160, max=+160)
-        cons_camera_bottom_y = torch.clip(boxes.center.y - boxes.height, min=-120, max=+120)
-        cons_camera_top_y = torch.clip(boxes.center.y + boxes.height, min=-120, max=+120)
-        cons_area = (cons_camera_right_x-cons_camera_left_x)*(cons_camera_top_y-cons_camera_bottom_y)
-        area_ratio = cons_area / ((boxes.width*boxes.height)+cons_area)
-        area_ratio = torch.nan_to_num(area_ratio, nan=0.0)
-        return 0.05 * (1-area_ratio) + 0.95 * area_ratio
-
-
-    def world_to_camera(self, world_point):
-        world_translate_x = world_point.x - self.world_x
-        world_translate_y = world_point.y - self.world_y
-        world_translate_z = world_point.z - self.world_z
-        world_rotate_x = torch.sin(self.world_theta) * world_translate_y + torch.cos(
-            self.world_theta) * world_translate_x
-        world_rotate_y = torch.cos(self.world_theta) * world_translate_y - torch.sin(
-            self.world_theta) * world_translate_x
-        world_rotate_z = world_translate_z
-        camera_pred_x = 160 + f_x * (-world_rotate_y) / (world_rotate_x)
-        camera_pred_y = 120 + f_y * -(world_rotate_z) / (world_rotate_x)  # using image coords y=0 means top
-        return CameraPoint(camera_pred_x, camera_pred_y)
-
-    def world_to_bbox(self, world_object):
-        camera_pred_centre = self.world_to_camera(world_object.centre)
-        camera_pred_top_left = self.world_to_camera(world_object.top_left)
-        camera_pred_top_right = self.world_to_camera(world_object.top_right)
-        camera_pred_bottom_left = self.world_to_camera(world_object.bottom_left)
-        camera_pred_bottom_right = self.world_to_camera(world_object.bottom_right)
-
-        pred_left = (camera_pred_bottom_left.x + camera_pred_top_left.x)/2
-        pred_right = (camera_pred_bottom_right.x + camera_pred_top_right.x)/2
-        pred_top = (camera_pred_top_left.y + camera_pred_top_right.y)/2
-        pred_bottom = (camera_pred_bottom_left.y + camera_pred_bottom_right.y) / 2
-        camera_pred_width = torch.clip(pred_right - pred_left, min=0.0)
-        camera_pred_height = torch.clip(pred_bottom - pred_top, min=0.0)
-        bounding_boxes = BoundingBoxes(camera_pred_centre, camera_pred_width, camera_pred_height)
-        return bounding_boxes
