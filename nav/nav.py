@@ -27,21 +27,14 @@ Detection = collections.namedtuple("Detection", "label, bbox, score")
 torch.set_num_threads(1)
 
 
-
-
 class Nav(Node):
     def __init__(self):
         super().__init__("nav")
         self.stationary, self.stopped, self.moving = range(3)
-        self.detections_subscription = self.create_subscription(
-            Detection2DArray,
-            "/detected_objects",
-            self.detections_callback,
-            10)
         self.annotated_image_subscription = self.create_subscription(
             Image,
-            "/annotated_image",
-            self.annotated_image_callback,
+            "/image",
+            self.image_callback,
             10)
         self.pose_subscription = self.create_subscription(
             Odometry,
@@ -133,7 +126,7 @@ class Nav(Node):
         image = cv_image.copy().transpose((2, 0, 1))
         self.annotated_image = image
 
-    def publish_vision_debug_image(self, pose_probability_map, detections, header):
+    def publish_vision_debug_image(self, pose_probability_map, image, header):
 #        return
         (loc, orientation) = self.get_location_MLE(pose_probability_map)
         boxes = []
@@ -158,24 +151,23 @@ class Nav(Node):
         if len(boxes) != 0:
             tensor_boxes = torch.stack(boxes)
             print("Box=", boxes)
-            debug_image = draw_bounding_boxes(torch.tensor(self.annotated_image), tensor_boxes,
+            debug_image = draw_bounding_boxes(torch.tensor(image), tensor_boxes,
                                               labels, colors="green")
         else:
-            if self.annotated_image is None:
-                return
-            debug_image = torch.tensor(self.annotated_image)
+            debug_image = torch.tensor(image)
 
         ros2_image_msg = self.bridge.cv2_to_imgmsg(debug_image.numpy().transpose(1, 2, 0), encoding = "rgb8")
         ros2_image_msg.header = header
         self.debug_image_publisher.publish(ros2_image_msg)
 
-    def detections_callback(self, msg):
+    def image_callback(self, msg):
         print("callback")
         if self.state == self.stopped:
-            pose_from_detections_probability_map = self.vision_nav.probmessage(msg.detections)
+            cv_image = self.bridge.imgmsg_to_cv2(msg, desired_encoding="rgb8")
+            image = cv_image.copy().transpose((2, 0, 1))
+            pose_from_detections_probability_map, annotated_image = self.vision_nav.probmessage(image, msg.header)
             self.inertial_nav.update_from_sensor(pose_from_detections_probability_map)
-            if self.annotated_image is not None:
-                self.publish_vision_debug_image(pose_from_detections_probability_map, msg.detections, msg.header)
+            self.publish_vision_debug_image(pose_from_detections_probability_map, annotated_image, msg.header)
             self.state = self.stationary
 
     def odometry_callback(self, msg):

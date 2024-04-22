@@ -29,11 +29,6 @@ def generate_launch_description():
                 ('in/compressed', '/charlie/compressed'),
                 ('out', '/image')]
         ),
-        Node(
-            package='coco_detector',
-            executable='coco_detector_node',
-            parameters=[{"device": "cuda"}]
-       ),
        Node(
             package='robot_state_publisher',
             executable='robot_state_publisher',

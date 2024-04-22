@@ -1,7 +1,18 @@
 import collections
 import itertools
 import math
+import numpy as np
 import torch
+from cv_bridge import CvBridge
+from torchvision.models import detection as detection_model
+from torchvision.utils import draw_bounding_boxes
+from vision_msgs.msg import BoundingBox2D, ObjectHypothesis, ObjectHypothesisWithPose
+from vision_msgs.msg import Detection2D, Detection2DArray
+from rclpy.node import Node
+from sensor_msgs.msg import Image
+
+
+
 
 f_x = 494
 f_y = 294
@@ -10,10 +21,11 @@ WorldObject = collections.namedtuple("WorldObject", "name, centre, bottom_left, 
 CameraPoint = collections.namedtuple("CameraPoint", "x, y")
 BoundingBoxes = collections.namedtuple("BoundingBoxes", "center, width, height")  # Grid of bounding boxes
 ObjectDetection = collections.namedtuple("ObjectDetection", "bounding_boxes, detection_probabilities")
+Detection = collections.namedtuple("Detection", "label, bbox, score")
 
-
-class VisionNav():
+class VisionNav(Node):
     def __init__(self, num_grid_cells, num_orientation_cells):
+        super().__init__("vision_nav_node")
         self.world_dog = WorldObject("dog",
             WorldPoint(1.5, 0.0, 0.27),
             WorldPoint(1.5, 0.11, .02),
@@ -48,6 +60,17 @@ class VisionNav():
         self.object_dictionary = {"dog": ObjectDetection(self.world_to_bbox(self.world_dog), self.box_probability(self.world_dog_boxes)),
             "cat": ObjectDetection(self.world_to_bbox(self.world_cat), self.box_probability(self.world_cat_boxes)) }
         self.object_list = list(self.object_dictionary.keys())
+        self.bridge = CvBridge()
+        self.model = detection_model.fasterrcnn_mobilenet_v3_large_320_fpn(
+            weights="FasterRCNN_MobileNet_V3_Large_320_FPN_Weights.COCO_V1",
+            progress=True,
+            weights_backbone="MobileNet_V3_Large_Weights.IMAGENET1K_V1")
+        self.class_labels = \
+            detection_model.FasterRCNN_MobileNet_V3_Large_320_FPN_Weights.DEFAULT.meta["categories"]
+        self.model.eval()
+        self.annotated_image_publisher = \
+            self.create_publisher(Image, "annotated_image", 10)
+
 
     def prob_map(self, bbox, boxes):
         scale = 25.0
@@ -81,11 +104,44 @@ class VisionNav():
             cum_prob += total_prob / len(detections_msg)
         return cum_prob
 
-    def probmessage(self, detections_msg):
-        if detections_msg is None:
+    def publish_annotated_image(self, filtered_detections, header, image):
+        """Draws the bounding boxes on the image and publishes to /annotated_image"""
+
+        if len(filtered_detections) > 0:
+            pred_boxes = torch.stack([detection.bbox for detection in filtered_detections])
+            pred_labels = [self.class_labels[detection.label] for detection in filtered_detections]
+            annotated_image = draw_bounding_boxes(torch.tensor(image), pred_boxes,
+                                                  pred_labels, colors="yellow")
+        else:
+            annotated_image = torch.tensor(image)
+        ros2_image_msg = self.bridge.cv2_to_imgmsg(annotated_image.numpy().transpose(1, 2, 0),
+                                                   encoding="rgb8")
+        ros2_image_msg.header = header
+        self.annotated_image_publisher.publish(ros2_image_msg)
+        return annotated_image
+
+    def detect_image(self, image, header):
+        detection_threshold = 0.9
+        batch_image = np.expand_dims(image, axis=0)
+        tensor_image = torch.tensor(batch_image/255.0, dtype=torch.float)
+        mobilenet_detections = self.model(tensor_image)[0]  # pylint: disable=E1102 disable not callable warning
+        filtered_detections = [Detection(label_id, box, score) for label_id, box, score in
+            zip(mobilenet_detections["labels"],
+            mobilenet_detections["boxes"],
+            mobilenet_detections["scores"]) if score >= detection_threshold]
+
+        annotated_image = self.publish_annotated_image(filtered_detections, header, image)
+
+        if filtered_detections is None:
             return torch.zeros([self.num_grid_cells, self.num_grid_cells, self.num_orientation_cells]) \
                     + \
                 (1.0 / (self.num_grid_cells * self.num_grid_cells * self.num_orientation_cells))
+        detections = \
+            [self.mobilenet_to_ros2(detection, header) for detection in filtered_detections]
+        return detections, annotated_image
+
+    def probmessage(self, image, header):
+        detections, annotated_image = self.detect_image(image, header)
         comb = list(itertools.product([False,True], repeat=2))
         s = self.world_x * 0.0
         for assignment in comb:
@@ -96,8 +152,28 @@ class VisionNav():
                 else:
                     probs = probs * self.object_dictionary[self.object_list[idx]].detection_probabilities
             assignments = [i for i, x in enumerate(assignment) if x]
-            s += self.probmessage_cond_a(detections_msg, assignments) * probs
-        return s
+            s += self.probmessage_cond_a(detections, assignments) * probs
+        return s, annotated_image
+
+    def mobilenet_to_ros2(self, detection, header):
+        """Converts a Detection tuple(label, bbox, score) to a ROS2 Detection2D message."""
+
+        detection2d = Detection2D()
+        detection2d.header = header
+        object_hypothesis_with_pose = ObjectHypothesisWithPose()
+        object_hypothesis = ObjectHypothesis()
+        object_hypothesis.class_id = self.class_labels[detection.label]
+        object_hypothesis.score = detection.score.detach().item()
+        object_hypothesis_with_pose.hypothesis = object_hypothesis
+        detection2d.results.append(object_hypothesis_with_pose)
+        bounding_box = BoundingBox2D()
+        bounding_box.center.position.x = float((detection.bbox[0] + detection.bbox[2]) / 2)
+        bounding_box.center.position.y = float((detection.bbox[1] + detection.bbox[3]) / 2)
+        bounding_box.center.theta = 0.0
+        bounding_box.size_x = float(2 * (bounding_box.center.position.x - detection.bbox[0]))
+        bounding_box.size_y = float(2 * (bounding_box.center.position.y - detection.bbox[1]))
+        detection2d.bbox = bounding_box
+        return detection2d
 
     def box_probability(self, boxes):
         """Computes the probability of a bounding box being detected.
