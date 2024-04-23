@@ -77,7 +77,7 @@ class VisionNav(Node):
         res4 = torch.distributions.normal.Normal(pose_boxes.center_y, scale).log_prob(
             torch.tensor(detected_box.center_y))
         res = res1 + res2 + res3 + res4
-        mynorm = res - torch.logsumexp(res, dim=[0, 1, 2], keepdim=False)
+        mynorm = res # - torch.logsumexp(res, dim=[0, 1, 2], keepdim=False)
         smyprobs = torch.exp(mynorm)
         return smyprobs
 
@@ -87,11 +87,16 @@ class VisionNav(Node):
         prob_dist_random = 0.05 * 0.01 * 0.01 * 0.01 * 0.01
         prob_dist_random_boxes = prob_dist_random+(self.world_x*0.0)
         if proposals == []:
-            return prob_dist_random_boxes**len(detections_msg)
+            return prob_dist_random_boxes**len(detections_msg.labels)
         proposal, *remaining_proposals = proposals
         cum_prob = self.world_x * 0.0
         for assign_idx in range(len(detections_msg.labels)):
             rem_detections = detections_msg[:assign_idx] + detections_msg[assign_idx+1:]
+            rem_detections = Detections(
+                detections_msg[0][:assign_idx] + detections_msg[0][assign_idx+1:],
+                detections_msg[1][:assign_idx] + detections_msg[1][assign_idx + 1:],
+                detections_msg[2][:assign_idx] + detections_msg[2][assign_idx + 1:]
+                                        )
             proposal_name = self.object_list[proposal]
             prob_assignment = self.prob_map(self.object_dictionary[proposal_name].bounding_boxes, BoundingBoxes(
                                             detections_msg.bounding_boxes.center_x[assign_idx],
@@ -109,16 +114,21 @@ class VisionNav(Node):
         detections, annotated_image = self.detect_image(image, header)
         comb = list(itertools.product([False,True], repeat=2))
         s = self.world_x * 0.0
-        for assignment in comb:
+        cond_assignment_probs = torch.zeros(len(comb), self.num_grid_cells, self.num_grid_cells, self.num_orientation_cells)
+        assignment_probs = torch.zeros(len(comb), self.num_grid_cells, self.num_grid_cells, self.num_orientation_cells)
+        for assignment_idx in range(len(comb)):
             probs = self.world_x * 0.0 + 1.0
-            for idx in range(len(assignment)):
-                if idx == False:
+            for idx in range(2):
+                if comb[assignment_idx][idx] == False:
                     probs = probs * (1.0-self.object_dictionary[self.object_list[idx]].detection_probabilities)
                 else:
                     probs = probs * self.object_dictionary[self.object_list[idx]].detection_probabilities
-            assignments = [i for i, x in enumerate(assignment) if x]
-            s += self.probmessage_cond_a(detections, assignments) * probs
-        return s, annotated_image
+            assignments = [i for i, x in enumerate(comb[assignment_idx]) if x]
+            assignment_probs[assignment_idx] = probs
+            cond_assignment_probs[assignment_idx] = self.probmessage_cond_a(detections, assignments)
+        joint_probs = cond_assignment_probs * assignment_probs
+        tot_probs = joint_probs.sum(axis=0)
+        return tot_probs, annotated_image
 
     def box_probability(self, boxes):
         """Computes the probability of a bounding box being detected.
@@ -167,10 +177,10 @@ class VisionNav(Node):
 
         if len(filtered_detections) > 0:
             pred_boxes = torch.zeros([len(filtered_detections.labels), 4])
-            pred_boxes[:, 0] = filtered_detections.bounding_boxes.center_x - filtered_detections.bounding_boxes.width
-            pred_boxes[:, 1] = filtered_detections.bounding_boxes.center_y - filtered_detections.bounding_boxes.height
-            pred_boxes[:, 2] = filtered_detections.bounding_boxes.center_x + filtered_detections.bounding_boxes.width
-            pred_boxes[:, 3] = filtered_detections.bounding_boxes.center_y + filtered_detections.bounding_boxes.height
+            pred_boxes[:, 0] = filtered_detections.bounding_boxes.center_x - filtered_detections.bounding_boxes.width/2
+            pred_boxes[:, 1] = filtered_detections.bounding_boxes.center_y - filtered_detections.bounding_boxes.height/2
+            pred_boxes[:, 2] = filtered_detections.bounding_boxes.center_x + filtered_detections.bounding_boxes.width/2
+            pred_boxes[:, 3] = filtered_detections.bounding_boxes.center_y + filtered_detections.bounding_boxes.height/2
             annotated_image = draw_bounding_boxes(torch.tensor(image), pred_boxes,
                                                   filtered_detections.labels, colors="yellow")
         else:
@@ -191,7 +201,7 @@ class VisionNav(Node):
         labels = mobilenet_detections["labels"][filtered_idx]
         boxes = mobilenet_detections["boxes"][filtered_idx]
         scores = mobilenet_detections["scores"][filtered_idx]
-        pred_labels = [self.class_labels[label_idx] for label_idx in range(labels.shape[0])]
+        pred_labels = [self.class_labels[labels[label_idx]] for label_idx in range(labels.shape[0])]
 
         center_x = (boxes[:, 0] + boxes[:, 2])/2.0
         center_y = (boxes[:,1] + boxes[:,3])/2.0

@@ -137,8 +137,8 @@ class Nav(Node):
             if score < .5:
                 continue
 #            box = Detection("debug", box_tensor, score)
-            center_x = obj.bounding_boxes.center.x[loc[0], loc[1], orientation]
-            center_y = obj.bounding_boxes.center.y[loc[0], loc[1], orientation]
+            center_x = obj.bounding_boxes.center_x[loc[0], loc[1], orientation]
+            center_y = obj.bounding_boxes.center_y[loc[0], loc[1], orientation]
             width = obj.bounding_boxes.width[loc[0], loc[1], orientation]
             height = obj.bounding_boxes.height[loc[0], loc[1], orientation]
             xmin = center_x - width / 2
