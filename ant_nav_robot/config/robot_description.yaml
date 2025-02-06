@@ -1,0 +1,55 @@
+controller_manager:
+  ros__parameters:
+    update_rate: 10  # Hz
+
+    omni_wheel_controller:
+      type: omni_wheel_controller/OmniWheelController
+
+
+
+omni_wheel_controller:
+  ros__parameters:
+
+    use_stamped_vel: false
+
+    omni_wheel_names  : ['PORT_D', 'PORT_A', 'PORT_B']
+    # Going clockwise, viewed from above starting at front: PORT_D, PORT_A, PORT_B
+
+
+    omni_wheel_angle  : [0.0, -2.094, 2.094]
+
+    omni_wheel_distance : 0.055
+    wheel_radius : 0.024
+
+    odom_frame_id: odom
+    base_frame_id: base_link
+
+    pose_covariance_diagonal : [0.001, 0.001, 1000000.0, 1000000.0, 1000000.0, 1000.0]
+    twist_covariance_diagonal: [0.001, 0.001, 1000000.0, 1000000.0, 1000000.0, 1000.0]
+
+    enable_odom_tf: true
+
+    cmd_vel_timeout: 3.0
+    publish_limited_velocity: true
+    velocity_rolling_window_size: 10
+
+    # limits
+    linear.x.has_velocity_limits: true
+    linear.x.has_acceleration_limits: false
+    linear.x.has_jerk_limits: false
+    linear.x.max_velocity: 1.0
+    linear.x.min_velocity: -1.0
+    linear.x.max_acceleration: 0.4
+    linear.x.min_acceleration: -0.4
+    linear.x.max_jerk: 0.5
+    linear.x.min_jerk: -0.5
+
+    angular.z.has_velocity_limits: true
+    angular.z.has_acceleration_limits: false
+    angular.z.has_jerk_limits: false
+    angular.z.max_velocity: 1.5
+    angular.z.min_velocity: -1.5
+    angular.z.max_acceleration: 0.8
+    angular.z.min_acceleration: -0.8
+    angular.z.max_jerk: 0.5
+    angular.z.min_jerk: -0.5
