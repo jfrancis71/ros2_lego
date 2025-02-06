@@ -26,27 +26,38 @@ class AntNav1(Node):
         self.last_image_idx = self.images.shape[0]-1
 
     def normalize(self, image):
-        return ((np.median(image, axis=(0,1)) - image)>0)*2.0 - 1.0
+        """Binarizes onto (-1,1) using median."""
+        return ((image - np.median(image, axis=(0,1)))>0)*1.0
 
     def load_images(self):
+        """Reads in images resizes to 64x64. Takes subslices of 32x64 and normalizes"""
         files = glob.glob(f"{self.route_folder}/*.jpg")
         files.sort()
-        return np.array([self.normalize(np.array(PILImage.open(fname).resize((56,64)))/256.) for fname in files])
+        self.resized = np.array([np.array(PILImage.open(fname).resize((64,64)))/256. for fname in files])
+        normalized = np.array([np.array([self.normalize(self.resized[image_idx, :, offset:32+offset]) for offset in range(32)]) for image_idx in range(len(files))])
+        return normalized
 
     def route_image_diff(self, image):
-        return np.array([correlate(image, self.images[idx], mode='valid')/(64*64*3) for idx in range(self.images.shape[0])])[:,0,:,0]
+#        return np.array([correlate(image, self.images[idx], mode='valid')/(64*64*3) for idx in range(self.images.shape[0])])[:,0,:,0]
 #        return ((self.images - image)**2).mean(axis=(1,2,3))
+        centre_image = image[:, 16:48]
+        norm_image = self.normalize(centre_image)
+        diffs = ((norm_image - self.images)**2).mean(axis=(2,3,4))
+        return diffs
 
     def image_callback(self, image_msg):
         cv_image = self.bridge.imgmsg_to_cv2(image_msg, desired_encoding="rgb8")
-        image = self.normalize(np.array(PILImage.fromarray(cv_image).resize((64,64)))/256.)
+        image = np.array(PILImage.fromarray(cv_image).resize((64,64)))/256.
+#        image = self.resized[0]
         image_diffs = self.route_image_diff(image)
         print(image_diffs)
         twist = Twist()
         debug_image_msg = self.bridge.cv2_to_imgmsg((image_diffs.clip(0.0, 1.0)*256).astype(np.int8), "8SC1")
-        cmax = image_diffs.max()
-        image_idx, angle = np.unravel_index(np.argmax(image_diffs, axis=None), image_diffs.shape)
-        if image_idx == self.last_image_idx or cmax < .3:
+        cmin = image_diffs.min()
+        image_idx, angle = np.unravel_index(np.argmin(image_diffs, axis=None), image_diffs.shape)
+        if image_idx != self.last_image_idx:
+            angle = np.argmin(image_diffs[image_idx+1])
+        if image_idx == self.last_image_idx or cmin > 1.5:
             twist.linear.x = 0.00
             twist.angular.z = 0.00
         else:
@@ -56,7 +67,7 @@ class AntNav1(Node):
 #                twist.angular.z = -0.5
 #            if angle < 4:
 #                twist.angular.z = 0.5
-            twist.angular.z = -(angle-4)/12
+            twist.angular.z = (angle-16)/24
         self.publisher.publish(twist)
         self.image_publisher.publish(debug_image_msg)
 

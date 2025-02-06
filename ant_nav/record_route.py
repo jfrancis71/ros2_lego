@@ -29,8 +29,18 @@ class AntNav(Node):
         self.last_inertial_position = None
         self.last_inertial_orientation = None
 
+    def normalize(self, image):
+        """Binarizes onto (-1,1) using median."""
+        return ((image - np.median(image, axis=(0,1)))>0)*1.0
+
     def moved(self, current_inertial_position, current_inertial_orientation, last_inertial_position, last_inertial_orientation):
         if np.linalg.norm(current_inertial_position - last_inertial_position) > .05:
+            return True
+        else:
+            return False
+
+    def image_changed(self):
+        if ((self.normalize(self.last_image)-self.normalize(self.recorded_image))**2).mean() > .2:
             return True
         else:
             return False
@@ -43,6 +53,7 @@ class AntNav(Node):
     def save_image(self):
         self.image_idx += 1
         self.last_image.save(f"{self.route_folder}/{self.image_idx:04d}.jpg")
+        self.recorded_image = self.last_image
         print("Saving image", self.image_idx)
 
     def odometry_callback(self, msg):
