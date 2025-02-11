@@ -11,3 +11,6 @@ https://www.youtube.com/watch?v=Osu5Jyy6dF4&t=268s
 
 Barbara Webb, Neural Mechanisms of Insect Navigation, YouTube, Stanford, 17 Nov 2017
 https://www.youtube.com/watch?v=KpaPakvEGkY&t=1666s
+
+A Neural Data Structure for Novelty Detection, Dasgupta et al
+Makes connections with Bloom filters (from mushroom body)
