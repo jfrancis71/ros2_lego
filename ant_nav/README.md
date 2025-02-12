@@ -14,6 +14,11 @@ https://www.youtube.com/watch?v=KpaPakvEGkY&t=1666s
 
 A Neural Data Structure for Novelty Detection, Dasgupta et al
 Makes connections with Bloom filters (from mushroom body)
+https://www.pnas.org/doi/10.1073/pnas.1814448115
+
+Sensory encoding and memory in the mushroom body: signals, noise, and variability
+Moshe Parnas, Julia E Manoim, Andrew C Lin
+https://pmc.ncbi.nlm.nih.gov/articles/PMC11199953/
 
 
 ### SLAM
