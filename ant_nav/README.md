@@ -3,6 +3,9 @@
 Barbara Webb, Modelling the learning circuits of the insect brain, YouTube, CRISP - Queen Mary University of London. 04 Dec 2022
 https://www.youtube.com/watch?v=4bde8rNU3F4&t=1339s
 
+A Model of Ant Route Navigation Driven by Scene Familiarity, Baddeley B, Graham P, Husbands P, Philippides A.
+https://journals.plos.org/ploscompbiol/article?id=10.1371/journal.pcbi.1002336
+
 Paul Graham, Ant Navigation: How To Be A Champion Navigator With A Small Brain, YouTube, Biological Recording Company, 07 Sep 2023
 https://www.youtube.com/watch?v=0TxiBBYQxms&t=2430s
 
