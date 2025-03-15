@@ -61,7 +61,7 @@ class AntNav1(Node):
             twist.linear.x = 0.00
             twist.angular.z = 0.00
         else:
-            twist.linear.x = 0.05
+            twist.linear.x = 0.1
 #            twist.angular.z = 0.00
 #            if angle > 4:
 #                twist.angular.z = -0.5

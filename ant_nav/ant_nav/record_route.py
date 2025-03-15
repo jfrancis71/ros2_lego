@@ -18,7 +18,7 @@ class AntNav(Node):
             10)
         self.pose_subscription = self.create_subscription(
             Odometry,
-            "/omni_wheel_controller/odom",
+            "/differential_drive_controller/odom",
             self.odometry_callback,
             10)
         self.bridge = CvBridge()
