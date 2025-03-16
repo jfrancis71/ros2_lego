@@ -7,6 +7,7 @@ from geometry_msgs.msg import Twist
 from cv_bridge import CvBridge
 import glob
 from scipy.signal import correlate
+import time
 
 
 class AntNav1(Node):
@@ -35,38 +36,42 @@ class AntNav1(Node):
         files.sort()
         self.resized = np.array([np.array(PILImage.open(fname).resize((64,64)))/256. for fname in files])
         normalized = np.array([np.array([self.normalize(self.resized[image_idx, :, offset:32+offset]) for offset in range(32)]) for image_idx in range(len(files))])
-        return normalized
+        return normalized.astype(np.float32)
 
     def route_image_diff(self, image):
-#        return np.array([correlate(image, self.images[idx], mode='valid')/(64*64*3) for idx in range(self.images.shape[0])])[:,0,:,0]
-#        return ((self.images - image)**2).mean(axis=(1,2,3))
         centre_image = image[:, 16:48]
-        norm_image = self.normalize(centre_image)
+        norm_image = self.normalize(centre_image).astype(np.float32)
+        start = time.time()
         diffs = ((norm_image - self.images)**2).mean(axis=(2,3,4))
+        end = time.time()
+        duration = end - start
+        if (duration > .1):
+            warn_msg = f'Delay computing route_image_diff {duration}'
+            self.get_logger().warn(warn_msg)
         return diffs
 
     def image_callback(self, image_msg):
         cv_image = self.bridge.imgmsg_to_cv2(image_msg, desired_encoding="rgb8")
-        image = np.array(PILImage.fromarray(cv_image).resize((64,64)))/256.
-#        image = self.resized[0]
+        image = np.array(PILImage.fromarray(cv_image).resize((64,64))).astype(np.float32)/256.
+        start = time.time()
         image_diffs = self.route_image_diff(image)
+        end = time.time()
+        duration = end - start
+        if (duration > .1):
+            warn_msg = f'Delay computing diff of {duration}'
+            self.get_logger().warn(warn_msg)
         twist = Twist()
         debug_image_msg = self.bridge.cv2_to_imgmsg((image_diffs.clip(0.0, 1.0)*256).astype(np.int8), "8SC1")
         cmin = image_diffs.min()
         image_idx, angle = np.unravel_index(np.argmin(image_diffs, axis=None), image_diffs.shape)
-        print("image_idx:", image_idx, ", angle: ", angle)
+        print("image_idx:", image_idx, ", angle: ", angle, "cmin=", cmin)
         if image_idx != self.last_image_idx:
             angle = np.argmin(image_diffs[image_idx+1])
-        if image_idx == self.last_image_idx or cmin > 1.5:
+        if image_idx == self.last_image_idx or cmin > 0.2:
             twist.linear.x = 0.00
             twist.angular.z = 0.00
         else:
             twist.linear.x = 0.1
-#            twist.angular.z = 0.00
-#            if angle > 4:
-#                twist.angular.z = -0.5
-#            if angle < 4:
-#                twist.angular.z = 0.5
             twist.angular.z = (angle-16)/48
         self.publisher.publish(twist)
         self.image_publisher.publish(debug_image_msg)
