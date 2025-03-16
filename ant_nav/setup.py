@@ -24,7 +24,7 @@ setup(
     tests_require=['pytest'],
     entry_points={
         'console_scripts': [
-            "person_follower_node = charlie.person_follower_node"
+            "record_route_node = ant_nav.record_route_node"
         ],
     },
 )
