@@ -24,7 +24,8 @@ setup(
     tests_require=['pytest'],
     entry_points={
         'console_scripts': [
-            "record_route_node = ant_nav.record_route_node"
+            "record_route_node = ant_nav.record_route_node",
+            "follow_route_node = ant_nav.follow_route_node"
         ],
     },
 )
