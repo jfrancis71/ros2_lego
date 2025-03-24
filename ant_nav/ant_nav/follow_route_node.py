@@ -22,7 +22,9 @@ class AntNav1(Node):
         self.image_publisher = self.create_publisher(Image, "/debug_image", 10)
         self.bridge = CvBridge()
         self.declare_parameter('route_folder', './default_route_folder')
+        self.declare_parameter('route_loop', False)
         self.route_folder = self.get_parameter('route_folder').get_parameter_value().string_value
+        self.route_loop = self.get_parameter('route_loop').get_parameter_value().bool_value
         self.images = self.load_images()
         self.last_image_idx = self.images.shape[0]-1
 
@@ -65,9 +67,8 @@ class AntNav1(Node):
         cmin = image_diffs.min()
         image_idx, angle = np.unravel_index(np.argmin(image_diffs, axis=None), image_diffs.shape)
         print("image_idx:", image_idx, ", angle: ", angle, "cmin=", cmin)
-        if image_idx != self.last_image_idx:
-            angle = np.argmin(image_diffs[image_idx+1])
-        if image_idx == self.last_image_idx or cmin > 0.2:
+        angle = np.argmin(image_diffs[(image_idx+1) % self.last_image_idx])
+        if cmin > 0.2 or (self.route_loop is False and image_idx == self.last_image_idx):
             twist.linear.x = 0.00
             twist.angular.z = 0.00
         else:
