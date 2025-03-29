@@ -66,14 +66,15 @@ class AntNav1(Node):
         debug_image_msg = self.bridge.cv2_to_imgmsg((image_diffs.clip(0.0, 1.0)*256).astype(np.int8), "8SC1")
         cmin = image_diffs.min()
         image_idx, angle = np.unravel_index(np.argmin(image_diffs, axis=None), image_diffs.shape)
-        print("image_idx:", image_idx, ", angle: ", angle, "cmin=", cmin)
         angle = np.argmin(image_diffs[(image_idx+1) % self.last_image_idx])
+        angle = angle-16
+        print("image_idx:", image_idx, ", angle: ", angle, "cmin=", cmin)
         if cmin > 0.2 or (self.route_loop is False and image_idx == self.last_image_idx):
             twist.linear.x = 0.00
             twist.angular.z = 0.00
         else:
-            twist.linear.x = 0.1
-            twist.angular.z = (angle-16)/48
+            twist.linear.x = 0.05
+            twist.angular.z = angle/48
         self.publisher.publish(twist)
         self.image_publisher.publish(debug_image_msg)
 
