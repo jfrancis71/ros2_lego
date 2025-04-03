@@ -23,6 +23,10 @@ Sensory encoding and memory in the mushroom body: signals, noise, and variabilit
 Moshe Parnas, Julia E Manoim, Andrew C Lin
 https://pmc.ncbi.nlm.nih.gov/articles/PMC11199953/
 
+An intrinsic oscillator underlies visual navigation in ants
+Leo Clement 1 2, Sebastian Schwarz 1, Antoine Wystrach
+https://www.sciencedirect.com/science/article/pii/S0960982222018504
+
 
 ### SLAM
 Simultaneous Localization and Mapping: Part I
