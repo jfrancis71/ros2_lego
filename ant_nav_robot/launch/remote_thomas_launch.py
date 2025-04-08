@@ -1,30 +1,23 @@
 from launch import LaunchDescription
 from launch.substitutions import Command, PathJoinSubstitution
+from launch.actions import IncludeLaunchDescription
 from launch_ros.actions import Node
+from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch_ros.substitutions import FindPackageShare
 
 
 def generate_launch_description():
-    robot_description_content = Command([
-        "cat ",
-        PathJoinSubstitution(
-            [FindPackageShare("thomas"), "config", "robot_hardware_description.urdf"])
-        ])
-    robot_controllers = PathJoinSubstitution(
-            [FindPackageShare("thomas"), "config", "robot_description.yaml"])
-    control_node = Node(
-        package="controller_manager",
-        executable="ros2_control_node",
-        parameters=[{"robot_description": robot_description_content}, robot_controllers],
-        remappings=[("/differential_drive_controller/cmd_vel_unstamped", "/cmd_vel")]
-,
-        output="both",
+
+    thomas_launch = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource([
+            PathJoinSubstitution([
+                FindPackageShare('thomas'),
+                'launch',
+                'brickpi3_motors_launch.py'
+            ])
+        ]),
     )
-    robot_controller_spawner = Node(
-        package="controller_manager",
-        executable="spawner",
-        arguments=["differential_drive_controller", "--controller-manager", "/controller_manager"],
-    )
+
     camera_node = Node(
         package='image_tools',
         executable='cam2image',
@@ -34,14 +27,14 @@ def generate_launch_description():
     compress_node = Node(
         package='image_transport',
         executable='republish',
-        arguments=['raw', 'compressed'],
+#        arguments=['raw', 'compressed'],
+        parameters=[{"in_transport": "raw", "out_transport": "compressed"}],
         remappings=[
             ('in', '/thomas/image'),
             ('out/compressed', '/thomas/compressed')]
     )
     nodes = [
-        control_node,
-        robot_controller_spawner,
+        thomas_launch,
         camera_node,
         compress_node
     ]
