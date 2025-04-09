@@ -3,10 +3,9 @@ from PIL import Image as PILImage
 import numpy as np
 from rclpy.node import Node
 from sensor_msgs.msg import Image
-from geometry_msgs.msg import Twist
+from geometry_msgs.msg import TwistStamped
 from cv_bridge import CvBridge
 import glob
-from scipy.signal import correlate
 import time
 
 
@@ -18,11 +17,12 @@ class AntNav1(Node):
             "/image",
             self.image_callback,
             10)
-        self.publisher = self.create_publisher(Twist, "/cmd_vel", 10)
+        self.publisher = self.create_publisher(TwistStamped, "/cmd_vel", 10)
         self.image_publisher = self.create_publisher(Image, "/debug_image", 10)
         self.bridge = CvBridge()
         self.declare_parameter('route_folder', './default_route_folder')
-        self.declare_parameter('log_folder', './log_folder')
+        self.no_logging = "NoLogging"
+        self.declare_parameter('log_folder', self.no_logging)
         self.declare_parameter('route_loop', False)
         self.route_folder = self.get_parameter('route_folder').get_parameter_value().string_value
         self.log_folder = self.get_parameter('log_folder').get_parameter_value().string_value
@@ -45,9 +45,10 @@ class AntNav1(Node):
         return normalized.astype(np.float32)
 
     def save_image(self, image):
-        self.image_idx += 1
-        image.save(f"{self.log_folder}/{self.image_idx:04d}.jpg")
-        print("Saving image", self.image_idx)
+        if self.log_folder is not self.no_logging:
+            self.image_idx += 1
+            image.save(f"{self.log_folder}/{self.image_idx:04d}.jpg")
+            print("Saving image", self.image_idx)
 
     def route_image_diff(self, image):
         centre_image = image[:, 16:48]
@@ -72,7 +73,8 @@ class AntNav1(Node):
         if (duration > .1):
             warn_msg = f'Delay computing diff of {duration}'
             self.get_logger().warn(warn_msg)
-        twist = Twist()
+        twist_stamped = TwistStamped()
+        twist_stamped.header = image_msg.header
         debug_image_msg = self.bridge.cv2_to_imgmsg((image_diffs.clip(0.0, 1.0)*256).astype(np.int8), "8SC1")
         cmin = image_diffs.min()
         image_idx, angle = np.unravel_index(np.argmin(image_diffs, axis=None), image_diffs.shape)
@@ -80,12 +82,12 @@ class AntNav1(Node):
         angle = angle-16
         print("image_idx:", image_idx, ", angle: ", angle, "cmin=", cmin)
         if cmin > 0.2 or (self.route_loop is False and image_idx == self.last_image_idx):
-            twist.linear.x = 0.00
-            twist.angular.z = 0.00
+            twist_stamped.twist.linear.x = 0.00
+            twist_stamped.twist.angular.z = 0.00
         else:
-            twist.linear.x = 0.05
-            twist.angular.z = angle/48
-        self.publisher.publish(twist)
+            twist_stamped.twist.linear.x = 0.05
+            twist_stamped.twist.angular.z = angle/48
+        self.publisher.publish(twist_stamped)
         self.image_publisher.publish(debug_image_msg)
         self.save_image(pil_image)
 
