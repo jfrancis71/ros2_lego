@@ -7,6 +7,7 @@ from geometry_msgs.msg import TwistStamped
 from cv_bridge import CvBridge
 import glob
 import time
+from scipy.ndimage import gaussian_filter
 
 
 class AntNav1(Node):
@@ -74,6 +75,7 @@ class AntNav1(Node):
         files.sort()
         self.resized = np.array([np.array(PILImage.open(fname).resize((64,64)))/256. for fname in files])
         normalized = np.array([np.array([self.normalize(self.resized[image_idx, :, offset:32+offset]) for offset in range(32)]) for image_idx in range(len(files))])
+        normalized = gaussian_filter(normalized, sigma=(0, 0, 2, 2, 0))
         return normalized.astype(np.float32)
 
     def save_image(self, image):
@@ -98,6 +100,7 @@ class AntNav1(Node):
         cv_image = self.bridge.imgmsg_to_cv2(image_msg, desired_encoding="rgb8")
         pil_image = PILImage.fromarray(cv_image)
         image = np.array(pil_image.resize((64,64))).astype(np.float32)/256.
+        image = gaussian_filter(image, sigma=(2, 2, 0))
         start = time.time()
         image_diffs = self.route_image_diff(image)
         end = time.time()
@@ -108,7 +111,7 @@ class AntNav1(Node):
         twist_stamped = TwistStamped()
         twist_stamped.header = image_msg.header
         debug_image_msg = self.bridge.cv2_to_imgmsg((image_diffs.clip(0.0, 1.0)*256).astype(np.int8), "8SC1")
-        cmin = image_diffs.min()
+        cmin = np.sqrt(image_diffs.min())
         image_idx, angle = np.unravel_index(np.argmin(image_diffs, axis=None), image_diffs.shape)
         centre_image = image[:, 16:48]
         norm_image = self.normalize(centre_image).astype(np.float32)
