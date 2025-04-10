@@ -24,9 +24,11 @@ class AntNav1(Node):
         self.no_logging = "NoLogging"
         self.declare_parameter('log_folder', self.no_logging)
         self.declare_parameter('route_loop', False)
+        self.declare_parameter('max_match_threshold', 80.0)
         self.route_folder = self.get_parameter('route_folder').get_parameter_value().string_value
         self.log_folder = self.get_parameter('log_folder').get_parameter_value().string_value
         self.route_loop = self.get_parameter('route_loop').get_parameter_value().bool_value
+        self.max_match_threshold = self.get_parameter('max_match_threshold').get_parameter_value().double_value
         self.images = self.load_images()
         self.last_image_idx = self.images.shape[0]-1
         self.image_idx = 0
@@ -34,7 +36,35 @@ class AntNav1(Node):
     def normalize(self, image):
         """Binarizes onto (-1,1) using median."""
         return image/image.mean()
-        
+
+    def template_match(self, template, image):
+        template_sliding = np.lib.stride_tricks.sliding_window_view(template, window_shape=(5, 5), axis=(0, 1))
+        template_shape = template_sliding.shape
+        t = template_sliding.reshape(list(template_shape[:2]) + [75])
+        template = np.lib.stride_tricks.sliding_window_view(t, window_shape=(5, 5), axis=(0, 1)).transpose(
+            (3, 4, 0, 1, 2))
+        # return template
+
+        obj_sliding = np.lib.stride_tricks.sliding_window_view(image, window_shape=(5, 5), axis=(0, 1))
+        obj_shape = obj_sliding.shape
+        obj = obj_sliding.reshape(list(obj_shape[:2]) + [75])[2:-2, 2:-2]
+
+        red_raw_weight = np.exp(-((obj[:, :, :36] - template[:, :, :, :, :36]) ** 2).sum(axis=-1))
+        red_norm_weight = red_raw_weight / (red_raw_weight.sum(axis=(0, 1)) + .0000000000001)
+        red_predictions = (template_sliding[2:-2, 2:-2, 0].transpose((2, 3, 0, 1)) * red_norm_weight).sum(axis=(0, 1))
+
+        green_raw_weight = np.exp(-((obj[:, :, :37] - template[:, :, :, :, :37]) ** 2).sum(axis=-1))
+        green_norm_weight = green_raw_weight / (green_raw_weight.sum(axis=(0, 1)) + .0000000000001)
+        green_predictions = (template_sliding[2:-2, 2:-2, 1].transpose((2, 3, 0, 1)) * green_norm_weight).sum(
+            axis=(0, 1))
+
+        blue_raw_weight = np.exp(-((obj[:, :, :38] - template[:, :, :, :, :38]) ** 2).sum(axis=-1))
+        blue_norm_weight = blue_raw_weight / (blue_raw_weight.sum(axis=(0, 1)) + .0000000000001)
+        blue_predictions = (template_sliding[2:-2, 2:-2, 2].transpose((2, 3, 0, 1)) * blue_norm_weight).sum(axis=(0, 1))
+
+        return ((red_predictions - image[4:-4, 4:-4, 0]) ** 2).sum() + (
+                    (green_predictions - image[4:-4, 4:-4, 1]) ** 2).sum() + (
+                    (blue_predictions - image[4:-4, 4:-4, 2]) ** 2).sum()
 
     def load_images(self):
         """Reads in images resizes to 64x64. Takes subslices of 32x64 and normalizes"""
@@ -78,10 +108,14 @@ class AntNav1(Node):
         debug_image_msg = self.bridge.cv2_to_imgmsg((image_diffs.clip(0.0, 1.0)*256).astype(np.int8), "8SC1")
         cmin = image_diffs.min()
         image_idx, angle = np.unravel_index(np.argmin(image_diffs, axis=None), image_diffs.shape)
+        centre_image = image[:, 16:48]
+        norm_image = self.normalize(centre_image).astype(np.float32)
+        sub_window_idx = np.argmin(image_diffs[image_idx])
+        flex_diff = self.template_match(self.images[image_idx, sub_window_idx], norm_image)
         angle = np.argmin(image_diffs[(image_idx+1) % self.last_image_idx])
         angle = angle-16
-        print("image_idx:", image_idx, ", angle: ", angle, "cmin=", cmin)
-        if cmin > 0.2 or (self.route_loop is False and image_idx == self.last_image_idx):
+        print("image_idx:", image_idx, ", angle: ", angle, "cmin=", cmin, "flex diff=", flex_diff)
+        if flex_diff > self.max_match_threshold or (self.route_loop is False and image_idx == self.last_image_idx):
             twist_stamped.twist.linear.x = 0.00
             twist_stamped.twist.angular.z = 0.00
         else:
