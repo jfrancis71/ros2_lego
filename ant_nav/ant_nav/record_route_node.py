@@ -5,7 +5,7 @@ from rclpy.node import Node
 from sensor_msgs.msg import Image
 from nav_msgs.msg import Odometry
 from cv_bridge import CvBridge
-from tf_transformations import euler_from_quaternion
+from scipy.spatial.transform import Rotation as R
 
 
 class AntNav(Node):
@@ -60,7 +60,7 @@ class AntNav(Node):
         print("POSE", msg.pose.pose.position)
         current_inertial_position = np.array([msg.pose.pose.position.x, msg.pose.pose.position.y])
         q = msg.pose.pose.orientation
-        current_inertial_orientation = euler_from_quaternion((q.x, q.y, q.z, q.w))[2]
+        current_inertial_orientation = R.from_quat([q.x, q.y, q.z, q.w]).as_euler('xyz')[2]
         print("Current IO=", current_inertial_orientation)
 
         if self.last_inertial_position is None:
