@@ -25,10 +25,12 @@ class AntNav1(Node):
         self.declare_parameter('log_folder', self.no_logging)
         self.declare_parameter('route_loop', False)
         self.declare_parameter('max_match_threshold', 80.0)
+        self.declare_parameter('drive', True)
         self.route_folder = self.get_parameter('route_folder').get_parameter_value().string_value
         self.log_folder = self.get_parameter('log_folder').get_parameter_value().string_value
         self.route_loop = self.get_parameter('route_loop').get_parameter_value().bool_value
         self.max_match_threshold = self.get_parameter('max_match_threshold').get_parameter_value().double_value
+        self.drive = self.get_parameter('drive').get_parameter_value().bool_value
         self.images = self.load_images()
         self.last_image_idx = self.images.shape[0]-1
         self.image_idx = 0
@@ -121,7 +123,8 @@ class AntNav1(Node):
         else:
             twist_stamped.twist.linear.x = 0.05
             twist_stamped.twist.angular.z = angle/48
-        self.publisher.publish(twist_stamped)
+        if self.drive:
+            self.publisher.publish(twist_stamped)
         self.image_publisher.publish(debug_image_msg)
         self.save_image(pil_image)
 
