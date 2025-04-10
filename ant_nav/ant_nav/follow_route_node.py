@@ -18,6 +18,7 @@ class AntNav1(Node):
             self.image_callback,
             10)
         self.publisher = self.create_publisher(TwistStamped, "/cmd_vel", 10)
+        self.image_publisher = self.create_publisher(Image, "/debug_image", 10)
         self.bridge = CvBridge()
         self.declare_parameter('route_folder', './default_route_folder')
         self.no_logging = "NoLogging"
@@ -30,59 +31,55 @@ class AntNav1(Node):
         self.last_image_idx = self.images.shape[0]-1
         self.image_idx = 0
 
+    def normalize(self, image):
+        """Binarizes onto (-1,1) using median."""
+        return image/image.mean()
+        
 
     def load_images(self):
-        """Reads in images resizes to 64x64 and normalizes"""
+        """Reads in images resizes to 64x64. Takes subslices of 32x64 and normalizes"""
         files = glob.glob(f"{self.route_folder}/*.jpg")
         files.sort()
-        resized = np.array([np.array(PILImage.open(file_name).resize((64,64))).astype(np.float32)/256. for file_name in files])
-        normalized = (resized.transpose(1, 2, 3, 0)/resized.mean(axis=(1,2,3))).transpose(3, 0, 1, 2)
-        return normalized
+        self.resized = np.array([np.array(PILImage.open(fname).resize((64,64)))/256. for fname in files])
+        normalized = np.array([np.array([self.normalize(self.resized[image_idx, :, offset:32+offset]) for offset in range(32)]) for image_idx in range(len(files))])
+        return normalized.astype(np.float32)
 
     def save_image(self, image):
-        self.image_idx += 1
-        image.save(f"{self.log_folder}/{self.image_idx:04d}.jpg")
-        print("Saving image", self.image_idx)
-
-    def template_match(self, templates, image):
-        return ((image - templates) ** 2).mean(axis=(1, 2, 3))
+        if self.log_folder is not self.no_logging:
+            self.image_idx += 1
+            image.save(f"{self.log_folder}/{self.image_idx:04d}.jpg")
+            print("Saving image", self.image_idx)
 
     def route_image_diff(self, image):
-        norm_image = image/image.mean()
+        centre_image = image[:, 16:48]
+        norm_image = self.normalize(centre_image).astype(np.float32)
         start = time.time()
-        diffs = self.template_match(self.images, norm_image)
+        diffs = ((norm_image - self.images)**2).mean(axis=(2,3,4))
         end = time.time()
         duration = end - start
-        if duration > .1:
+        if (duration > .1):
             warn_msg = f'Delay computing route_image_diff {duration}'
             self.get_logger().warn(warn_msg)
         return diffs
 
-    def calc_offset(self, template, image):
-        image_centre = image[:, 16:-16]
-        offsets = self.template_match(np.array([ template[:, offset:offset+32] for offset in range(32)]), image_centre)
-        return offsets
-
     def image_callback(self, image_msg):
         cv_image = self.bridge.imgmsg_to_cv2(image_msg, desired_encoding="rgb8")
         pil_image = PILImage.fromarray(cv_image)
-        resized = np.array(pil_image.resize((64,64))).astype(np.float32)/256.
-        image = resized/resized.mean()
+        image = np.array(pil_image.resize((64,64))).astype(np.float32)/256.
         start = time.time()
-        route_diffs = self.route_image_diff(image)
-        cmin = route_diffs.min()
-        image_idx = route_diffs.argmin()
-        offsets = self.calc_offset(self.images[(image_idx + 1) % self.last_image_idx], image)
-        angle = offsets.argmin()
-        angle = angle - 16
+        image_diffs = self.route_image_diff(image)
         end = time.time()
         duration = end - start
-        if duration > .1:
+        if (duration > .1):
             warn_msg = f'Delay computing diff of {duration}'
             self.get_logger().warn(warn_msg)
         twist_stamped = TwistStamped()
         twist_stamped.header = image_msg.header
-
+        debug_image_msg = self.bridge.cv2_to_imgmsg((image_diffs.clip(0.0, 1.0)*256).astype(np.int8), "8SC1")
+        cmin = image_diffs.min()
+        image_idx, angle = np.unravel_index(np.argmin(image_diffs, axis=None), image_diffs.shape)
+        angle = np.argmin(image_diffs[(image_idx+1) % self.last_image_idx])
+        angle = angle-16
         print("image_idx:", image_idx, ", angle: ", angle, "cmin=", cmin)
         if cmin > 0.2 or (self.route_loop is False and image_idx == self.last_image_idx):
             twist_stamped.twist.linear.x = 0.00
@@ -91,8 +88,8 @@ class AntNav1(Node):
             twist_stamped.twist.linear.x = 0.05
             twist_stamped.twist.angular.z = angle/48
         self.publisher.publish(twist_stamped)
-        if self.log_folder is not self.no_logging:
-            self.save_image(pil_image)
+        self.image_publisher.publish(debug_image_msg)
+        self.save_image(pil_image)
 
 
 rclpy.init()
