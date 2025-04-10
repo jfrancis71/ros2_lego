@@ -27,6 +27,10 @@ An intrinsic oscillator underlies visual navigation in ants
 Leo Clement 1 2, Sebastian Schwarz 1, Antoine Wystrach
 https://www.sciencedirect.com/science/article/pii/S0960982222018504
 
+Looking and homing: how displaced ants decide where to go
+Zeil, Narendra, Sturzi (2014)
+https://pmc.ncbi.nlm.nih.gov/articles/PMC3886322/
+
 
 ### SLAM
 Simultaneous Localization and Mapping: Part I
