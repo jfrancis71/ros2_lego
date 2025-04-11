@@ -27,14 +27,17 @@ class AntNav1(Node):
         self.declare_parameter('route_loop', False)
         self.declare_parameter('max_match_threshold', 80.0)
         self.declare_parameter('drive', True)
+        self.declare_parameter('lost_seq_len', 5)
         self.route_folder = self.get_parameter('route_folder').get_parameter_value().string_value
         self.log_folder = self.get_parameter('log_folder').get_parameter_value().string_value
         self.route_loop = self.get_parameter('route_loop').get_parameter_value().bool_value
         self.max_match_threshold = self.get_parameter('max_match_threshold').get_parameter_value().double_value
         self.drive = self.get_parameter('drive').get_parameter_value().bool_value
+        self.lost_seq_len  = self.get_parameter('lost_seq_len').get_parameter_value().integer_value
         self.images = self.load_images()
         self.last_image_idx = self.images.shape[0]-1
         self.image_idx = 0
+        self.lost = 0
 
     def normalize(self, image):
         """Binarizes onto (-1,1) using median."""
@@ -120,7 +123,11 @@ class AntNav1(Node):
         angle = np.argmin(image_diffs[(image_idx+1) % self.last_image_idx])
         angle = angle-16
         print("image_idx:", image_idx, ", angle: ", angle, "cmin=", cmin, "flex diff=", flex_diff)
-        if flex_diff > self.max_match_threshold or (self.route_loop is False and image_idx == self.last_image_idx):
+        if flex_diff > self.max_match_threshold:
+            self.lost += 1
+        else:
+            self.lost = 0
+        if self.lost > self.lost_seq_len or (self.route_loop is False and image_idx == self.last_image_idx):
             twist_stamped.twist.linear.x = 0.00
             twist_stamped.twist.angular.z = 0.00
         else:
