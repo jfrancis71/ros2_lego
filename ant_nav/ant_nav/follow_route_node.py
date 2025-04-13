@@ -99,43 +99,48 @@ class AntNav1(Node):
             self.get_logger().warn(warn_msg)
         return diffs
 
+    def publish_twist(self, header, speed, angular_velocity):
+        twist_stamped = TwistStamped()
+        twist_stamped.header = header
+        twist_stamped.twist.linear.x = speed
+        twist_stamped.twist.angular.z = angular_velocity
+        self.publisher.publish(twist_stamped)
+
+    def get_drive_instructions(self, np_image):
+        image = gaussian_filter(np_image, sigma=(2, 2, 0))
+        image_diffs = self.route_image_diff(image)
+        template_min = np.sqrt(image_diffs.min())
+        image_idx, angle = np.unravel_index(np.argmin(image_diffs, axis=None), image_diffs.shape)
+        angle = np.argmin(image_diffs[(image_idx + 1) % self.last_image_idx])
+        centre_image = image[:, 16:48]
+        sub_window_idx = np.argmin(image_diffs[image_idx])
+        norm_image = self.normalize(centre_image).astype(np.float32)
+        flex_template_min = self.template_match(self.images[image_idx, sub_window_idx], norm_image)
+        return image_idx, angle-16, template_min, flex_template_min
+
     def image_callback(self, image_msg):
         cv_image = self.bridge.imgmsg_to_cv2(image_msg, desired_encoding="rgb8")
         pil_image = PILImage.fromarray(cv_image)
         image = np.array(pil_image.resize((64,64))).astype(np.float32)/256.
-        image = gaussian_filter(image, sigma=(2, 2, 0))
         start = time.time()
-        image_diffs = self.route_image_diff(image)
+        image_idx, angle, template_min, flex_template_min = self.get_drive_instructions(image)
         end = time.time()
         duration = end - start
-        if (duration > .1):
-            warn_msg = f'Delay computing diff of {duration}'
+        if (duration > .05):
+            warn_msg = f'Delay computing drive instructions of {duration}'
             self.get_logger().warn(warn_msg)
-        twist_stamped = TwistStamped()
-        twist_stamped.header = image_msg.header
-        debug_image_msg = self.bridge.cv2_to_imgmsg((image_diffs.clip(0.0, 1.0)*256).astype(np.int8), "8SC1")
-        cmin = np.sqrt(image_diffs.min())
-        image_idx, angle = np.unravel_index(np.argmin(image_diffs, axis=None), image_diffs.shape)
-        centre_image = image[:, 16:48]
-        norm_image = self.normalize(centre_image).astype(np.float32)
-        sub_window_idx = np.argmin(image_diffs[image_idx])
-        flex_diff = self.template_match(self.images[image_idx, sub_window_idx], norm_image)
-        angle = np.argmin(image_diffs[(image_idx+1) % self.last_image_idx])
-        angle = angle-16
-        print("image_idx:", image_idx, ", angle: ", angle, "cmin=", cmin, "flex diff=", flex_diff)
-        if flex_diff > self.max_match_threshold:
+        print("image_idx:", image_idx, ", angle: ", angle, "template_min=", template_min, "flex template min=", flex_template_min)
+        if flex_template_min > self.max_match_threshold:
             self.lost += 1
         else:
             self.lost = 0
-        if self.lost > self.lost_seq_len or (self.route_loop is False and image_idx == self.last_image_idx):
-            twist_stamped.twist.linear.x = 0.00
-            twist_stamped.twist.angular.z = 0.00
-        else:
-            twist_stamped.twist.linear.x = 0.05
-            twist_stamped.twist.angular.z = angle/48
+        speed = 0.0
+        angular_velocity = 0.0
+        if self.lost < self.lost_seq_len and (image_idx != self.last_image_idx or self.route_loop):
+            speed = 0.05
+            angular_velocity = angle/48
         if self.drive:
-            self.publisher.publish(twist_stamped)
-        self.image_publisher.publish(debug_image_msg)
+            self.publish_twist(image_msg.header, speed, angular_velocity)
         self.save_image(pil_image)
 
 
