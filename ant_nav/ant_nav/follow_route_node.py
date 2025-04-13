@@ -4,6 +4,7 @@ import numpy as np
 from rclpy.node import Node
 from sensor_msgs.msg import Image
 from geometry_msgs.msg import TwistStamped
+from rclpy.time import Time
 from cv_bridge import CvBridge
 import glob
 import time
@@ -76,27 +77,20 @@ class AntNav1(Node):
         """Reads in images resizes to 64x64. Takes subslices of 32x64 and normalizes"""
         files = glob.glob(f"{self.route_folder}/*.jpg")
         files.sort()
-        self.resized = np.array([np.array(PILImage.open(fname).resize((64,64)))/256. for fname in files])
-        normalized = np.array([np.array([self.normalize(self.resized[image_idx, :, offset:32+offset]) for offset in range(32)]) for image_idx in range(len(files))])
+        resized = np.array([np.array(PILImage.open(fname).resize((64,64)))/256. for fname in files])
+        normalized = np.array([np.array([self.normalize(resized[image_idx, :, offset:32+offset]) for offset in range(32)]) for image_idx in range(len(files))])
         normalized = gaussian_filter(normalized, sigma=(0, 0, 2, 2, 0))
         return normalized.astype(np.float32)
 
     def save_image(self, image):
-        if self.log_folder is not self.no_logging:
-            self.image_idx += 1
-            image.save(f"{self.log_folder}/{self.image_idx:04d}.jpg")
-            print("Saving image", self.image_idx)
+        self.image_idx += 1
+        image.save(f"{self.log_folder}/{self.image_idx:04d}.jpg")
+        print("Saving image", self.image_idx)
 
     def route_image_diff(self, image):
         centre_image = image[:, 16:48]
         norm_image = self.normalize(centre_image).astype(np.float32)
-        start = time.time()
         diffs = ((norm_image - self.images)**2).mean(axis=(2,3,4))
-        end = time.time()
-        duration = end - start
-        if (duration > .1):
-            warn_msg = f'Delay computing route_image_diff {duration}'
-            self.get_logger().warn(warn_msg)
         return diffs
 
     def publish_twist(self, header, speed, angular_velocity):
@@ -118,17 +112,19 @@ class AntNav1(Node):
         flex_template_min = self.template_match(self.images[image_idx, sub_window_idx], norm_image)
         return image_idx, angle-16, template_min, flex_template_min
 
+    def warnings(self, image_msg_timestamp, time_received):
+        now = time.time()
+        compute_time = now - time_received
+        if compute_time > .05:
+            warn_msg = f'Delay computing drive instructions of {compute_time}'
+            self.get_logger().warn(warn_msg)
+
     def image_callback(self, image_msg):
+        time_received = time.time()
         cv_image = self.bridge.imgmsg_to_cv2(image_msg, desired_encoding="rgb8")
         pil_image = PILImage.fromarray(cv_image)
         image = np.array(pil_image.resize((64,64))).astype(np.float32)/256.
-        start = time.time()
         image_idx, angle, template_min, flex_template_min = self.get_drive_instructions(image)
-        end = time.time()
-        duration = end - start
-        if (duration > .05):
-            warn_msg = f'Delay computing drive instructions of {duration}'
-            self.get_logger().warn(warn_msg)
         print("image_idx:", image_idx, ", angle: ", angle, "template_min=", template_min, "flex template min=", flex_template_min)
         if flex_template_min > self.max_match_threshold:
             self.lost += 1
@@ -141,7 +137,9 @@ class AntNav1(Node):
             angular_velocity = angle/48
         if self.drive:
             self.publish_twist(image_msg.header, speed, angular_velocity)
-        self.save_image(pil_image)
+        self.warnings(image_msg.header.stamp, time_received)
+        if self.log_folder is not self.no_logging:
+            self.save_image(pil_image)
 
 
 rclpy.init()
