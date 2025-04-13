@@ -25,7 +25,7 @@ class AntNav1(Node):
         self.no_logging = "NoLogging"
         self.declare_parameter('log_folder', self.no_logging)
         self.declare_parameter('route_loop', False)
-        self.declare_parameter('max_match_threshold', 80.0)
+        self.declare_parameter('max_match_threshold', 60.0)
         self.declare_parameter('drive', True)
         self.declare_parameter('lost_seq_len', 5)
         self.route_folder = self.get_parameter('route_folder').get_parameter_value().string_value
