@@ -29,12 +29,14 @@ class AntNav1(Node):
         self.declare_parameter('max_match_threshold', 60.0)
         self.declare_parameter('drive', True)
         self.declare_parameter('lost_seq_len', 5)
+        self.declare_parameter('warning_time', .25)
         self.route_folder = self.get_parameter('route_folder').get_parameter_value().string_value
         self.log_folder = self.get_parameter('log_folder').get_parameter_value().string_value
         self.route_loop = self.get_parameter('route_loop').get_parameter_value().bool_value
         self.max_match_threshold = self.get_parameter('max_match_threshold').get_parameter_value().double_value
         self.drive = self.get_parameter('drive').get_parameter_value().bool_value
         self.lost_seq_len  = self.get_parameter('lost_seq_len').get_parameter_value().integer_value
+        self.warning_time = self.get_parameter('warning_time').get_parameter_value().double_value
         self.images = self.load_images()
         self.last_image_idx = self.images.shape[0]-1
         self.image_idx = 0
@@ -113,14 +115,16 @@ class AntNav1(Node):
         return image_idx, angle-16, template_min, flex_template_min
 
     def warnings(self, image_msg_timestamp, time_received):
-        now = time.time()
-        compute_time = now - time_received
-        if compute_time > .05:
-            warn_msg = f'Delay computing drive instructions of {compute_time}'
+        source_message_time = Time.from_msg(image_msg_timestamp).nanoseconds
+        now = self.get_clock().now().nanoseconds
+        process_time = (now - source_message_time)*1e-9
+        cpu_time = (now - time_received)*1e-9
+        if process_time > self.warning_time:
+            warn_msg = f'Delay processing drive instructions of {process_time} with cpu time {cpu_time}'
             self.get_logger().warn(warn_msg)
 
     def image_callback(self, image_msg):
-        time_received = time.time()
+        time_received = self.get_clock().now().nanoseconds
         cv_image = self.bridge.imgmsg_to_cv2(image_msg, desired_encoding="rgb8")
         pil_image = PILImage.fromarray(cv_image)
         image = np.array(pil_image.resize((64,64))).astype(np.float32)/256.
