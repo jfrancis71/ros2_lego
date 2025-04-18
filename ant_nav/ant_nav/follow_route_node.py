@@ -23,6 +23,7 @@ class AntNav1(Node):
         self.image_publisher = self.create_publisher(Image, "/debug_image", 10)
         self.bridge = CvBridge()
         self.declare_parameter('route_folder', './default_route_folder')
+        self.declare_parameter('lost_folder', './default_lost_route_folder')
         self.no_logging = "NoLogging"
         self.declare_parameter('log_folder', self.no_logging)
         self.declare_parameter('route_loop', False)
@@ -31,6 +32,7 @@ class AntNav1(Node):
         self.declare_parameter('lost_seq_len', 5)
         self.declare_parameter('warning_time', .25)
         self.route_folder = self.get_parameter('route_folder').get_parameter_value().string_value
+        self.lost_folder = self.get_parameter('lost_folder').get_parameter_value().string_value
         self.log_folder = self.get_parameter('log_folder').get_parameter_value().string_value
         self.route_loop = self.get_parameter('route_loop').get_parameter_value().bool_value
         self.max_match_threshold = self.get_parameter('max_match_threshold').get_parameter_value().double_value
@@ -38,6 +40,7 @@ class AntNav1(Node):
         self.lost_seq_len  = self.get_parameter('lost_seq_len').get_parameter_value().integer_value
         self.warning_time = self.get_parameter('warning_time').get_parameter_value().double_value
         self.images = self.load_images()
+        self.lost_images = self.load_lost_images()
         self.last_image_idx = self.images.shape[0]-1
         self.image_idx = 0
         self.lost = 0
@@ -84,6 +87,15 @@ class AntNav1(Node):
         normalized = gaussian_filter(normalized, sigma=(0, 0, 2, 2, 0))
         return normalized.astype(np.float32)
 
+    def load_lost_images(self):
+        """Reads in images resizes to 64x64. Takes subslices of 32x64 and normalizes"""
+        files = glob.glob(f"{self.lost_folder}/*.jpg")
+        files.sort()
+        resized = np.array([np.array(PILImage.open(fname).resize((64,64)))/256. for fname in files])
+        normalized = np.array([np.array([self.normalize(resized[image_idx, :, offset:32+offset]) for offset in range(32)]) for image_idx in range(len(files))])[:,15]
+        normalized = gaussian_filter(normalized, sigma=(0, 2, 2, 0))
+        return normalized.astype(np.float32)
+
     def save_image(self, image):
         self.image_idx += 1
         image.save(f"{self.log_folder}/{self.image_idx:04d}.jpg")
@@ -93,6 +105,12 @@ class AntNav1(Node):
         centre_image = image[:, 16:48]
         norm_image = self.normalize(centre_image).astype(np.float32)
         diffs = ((norm_image - self.images)**2).mean(axis=(2,3,4))
+        return diffs
+
+    def lost_route_image_diff(self, image):
+        centre_image = image[:, 16:48]
+        norm_image = self.normalize(centre_image).astype(np.float32)
+        diffs = ((norm_image - self.lost_images)**2).mean(axis=(1,2,3))
         return diffs
 
     def publish_twist(self, header, speed, angular_velocity):
@@ -105,6 +123,7 @@ class AntNav1(Node):
     def get_drive_instructions(self, np_image):
         image = gaussian_filter(np_image, sigma=(2, 2, 0))
         image_diffs = self.route_image_diff(image)
+        lost_image_diffs = self.lost_route_image_diff(image)
         template_min = np.sqrt(image_diffs.min())
         image_idx, angle = np.unravel_index(np.argmin(image_diffs, axis=None), image_diffs.shape)
         angle = np.argmin(image_diffs[(image_idx + 1) % self.last_image_idx])
@@ -112,7 +131,10 @@ class AntNav1(Node):
         sub_window_idx = np.argmin(image_diffs[image_idx])
         norm_image = self.normalize(centre_image).astype(np.float32)
         flex_template_min = self.template_match(self.images[image_idx, sub_window_idx], norm_image)
-        return image_idx, angle-16, template_min, flex_template_min
+        lost_min = np.sqrt(lost_image_diffs.min())
+        lost_image_idx = np.unravel_index(np.argmin(lost_image_diffs, axis=None), lost_image_diffs.shape)
+        lost_flex_template_min = self.template_match(self.lost_images[lost_image_idx], norm_image)
+        return image_idx, angle-16, template_min, lost_min, flex_template_min, lost_flex_template_min, lost_image_idx
 
     def warnings(self, image_msg_timestamp, time_received):
         source_message_time = Time.from_msg(image_msg_timestamp).nanoseconds
@@ -128,9 +150,10 @@ class AntNav1(Node):
         cv_image = self.bridge.imgmsg_to_cv2(image_msg, desired_encoding="rgb8")
         pil_image = PILImage.fromarray(cv_image)
         image = np.array(pil_image.resize((64,64))).astype(np.float32)/256.
-        image_idx, angle, template_min, flex_template_min = self.get_drive_instructions(image)
-        print("image_idx:", image_idx, ", angle: ", angle, "template_min=", template_min, "flex template min=", flex_template_min)
-        if flex_template_min > self.max_match_threshold:
+        image_idx, angle, template_min, lost_template_min, flex_template_min, lost_flex_template_min, lost_image_idx = self.get_drive_instructions(image)
+        print("image_idx:", image_idx, ", angle: ", angle, "template_min=", template_min, "lost_template_min min=",
+              lost_template_min, " flex template min", flex_template_min, " lost template flex min", lost_flex_template_min, " lost image idx = ", lost_image_idx)
+        if lost_template_min < template_min:
             self.lost += 1
         else:
             self.lost = 0
