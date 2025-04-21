@@ -18,7 +18,7 @@ class AntNav1(Node):
             Image,
             "/image",
             self.image_callback,
-            10)
+            1)
         self.publisher = self.create_publisher(TwistStamped, "/cmd_vel", 10)
         self.image_publisher = self.create_publisher(Image, "/debug_image", 10)
         self.bridge = CvBridge()
@@ -138,11 +138,12 @@ class AntNav1(Node):
 
     def warnings(self, image_msg_timestamp, time_received):
         source_message_time = Time.from_msg(image_msg_timestamp).nanoseconds
+        network_transit_time = (time_received - source_message_time)*1e-9
         now = self.get_clock().now().nanoseconds
         process_time = (now - source_message_time)*1e-9
         cpu_time = (now - time_received)*1e-9
         if process_time > self.warning_time:
-            warn_msg = f'Delay processing drive instructions of {process_time} with cpu time {cpu_time}'
+            warn_msg = f'Delay processing drive instructions of {process_time} with cpu time {cpu_time}, network transit time {network_transit_time}'
             self.get_logger().warn(warn_msg)
 
     def image_callback(self, image_msg):
