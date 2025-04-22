@@ -45,6 +45,12 @@ class AntNav1(Node):
         self.image_idx = 0
         self.lost = 0
 
+        center_images = self.images[:, 15]
+        sliding = np.lib.stride_tricks.sliding_window_view(center_images, window_shape=(5, 5), axis=(1, 2)).transpose(0, 1, 2, 4, 5, 3)
+        self.reshape = sliding.reshape([center_images.shape[0] * 60 * 28, 3 * 5 * 5])
+        self.reshape = np.random.permutation(self.reshape)
+
+
     def normalize(self, image):
         """Binarizes onto (-1,1) using median."""
         return image/image.mean()
@@ -77,6 +83,36 @@ class AntNav1(Node):
         return ((red_predictions - image[4:-4, 4:-4, 0]) ** 2).sum() + (
                     (green_predictions - image[4:-4, 4:-4, 1]) ** 2).sum() + (
                     (blue_predictions - image[4:-4, 4:-4, 2]) ** 2).sum()
+
+    def template_lost(self, image):
+
+        obj_sliding = np.lib.stride_tricks.sliding_window_view(image, window_shape=(5, 5), axis=(0, 1)).transpose(0, 1, 3, 4, 2)
+        obj_shape = obj_sliding.shape
+        obj = obj_sliding.reshape(list(obj_shape[:2]) + [75])[2:-2, 2:-2]
+
+        limit_ims = 100
+
+        red_raw_weight = np.exp(
+            -((obj[:, :, np.newaxis, :36] - self.reshape[np.newaxis, np.newaxis, :limit_ims, :36]) ** 2).sum(axis=-1))
+        red_norm_weight = (red_raw_weight.transpose(2, 0, 1) / (red_raw_weight.sum(axis=2) + .0000000000001)).transpose(1, 2, 0)
+        red_predictions = (self.reshape[np.newaxis, np.newaxis, :limit_ims, 36] * red_norm_weight).sum(axis=2)
+
+        green_raw_weight = np.exp(
+            -((obj[:, :, np.newaxis, :36] - self.reshape[np.newaxis, np.newaxis, :limit_ims, :36]) ** 2).sum(axis=-1))
+        green_norm_weight = (
+                    green_raw_weight.transpose(2, 0, 1) / (green_raw_weight.sum(axis=2) + .0000000000001)).transpose(1, 2, 0)
+        green_predictions = (self.reshape[np.newaxis, np.newaxis, :limit_ims, 36] * green_norm_weight).sum(axis=2)
+
+        blue_raw_weight = np.exp(
+            -((obj[:, :, np.newaxis, :36] - self.reshape[np.newaxis, np.newaxis, :limit_ims, :36]) ** 2).sum(axis=-1))
+        blue_norm_weight = (
+                    blue_raw_weight.transpose(2, 0, 1) / (blue_raw_weight.sum(axis=2) + .0000000000001)).transpose(1, 2, 0)
+        blue_predictions = (self.reshape[np.newaxis, np.newaxis, :limit_ims, 36] * blue_norm_weight).sum(axis=2)
+
+        return ((red_predictions - image[4:-4, 4:-4, 0]) ** 2).sum() + (
+                    (green_predictions - image[4:-4, 4:-4, 1]) ** 2).sum() + (
+                    (blue_predictions - image[4:-4, 4:-4, 2]) ** 2).sum()
+
 
     def load_images(self):
         """Reads in images resizes to 64x64. Takes subslices of 32x64 and normalizes"""
@@ -133,7 +169,7 @@ class AntNav1(Node):
         flex_template_min = self.template_match(self.images[image_idx, sub_window_idx], norm_image)
         lost_min = np.sqrt(lost_image_diffs.min())
         lost_image_idx = np.unravel_index(np.argmin(lost_image_diffs, axis=None), lost_image_diffs.shape)
-        lost_flex_template_min = self.template_match(self.lost_images[lost_image_idx], norm_image)
+        lost_flex_template_min = self.template_lost(norm_image)
         return image_idx, angle-16, template_min, lost_min, flex_template_min, lost_flex_template_min, lost_image_idx
 
     def warnings(self, image_msg_timestamp, time_received):
