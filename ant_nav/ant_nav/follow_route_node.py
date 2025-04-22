@@ -48,66 +48,65 @@ class AntNav1(Node):
         center_images = self.images[:, 15]
         sliding = np.lib.stride_tricks.sliding_window_view(center_images, window_shape=(5, 5), axis=(1, 2)).transpose(0, 1, 2, 4, 5, 3)
         self.reshape = sliding.reshape([center_images.shape[0] * 60 * 28, 3 * 5 * 5])
-        self.reshape = np.random.permutation(self.reshape)
-
+        # feature map is of shape [#images, 60, 28, 75]
+        self.feature_map = np.random.permutation(self.reshape)
 
     def normalize(self, image):
         """Binarizes onto (-1,1) using median."""
         return image/image.mean()
 
     def template_match(self, template, image):
-        template_sliding = np.lib.stride_tricks.sliding_window_view(template, window_shape=(5, 5), axis=(0, 1))
-        template_shape = template_sliding.shape
-        t = template_sliding.reshape(list(template_shape[:2]) + [75])
-        template = np.lib.stride_tricks.sliding_window_view(t, window_shape=(5, 5), axis=(0, 1)).transpose(
+        epsilon = .0000000000001
+        template_features = np.lib.stride_tricks.sliding_window_view(template, window_shape=(5, 5), axis=(0, 1))
+        template_features = template_features.transpose(0, 1, 3, 4, 2)
+        # template feature map is of shape [60, 28, 75] Features are flattened in last dimension as we will be building
+        # arrays of feature maps at each position and it may be confusing to have different spatial maps in same array.
+        template_features = template_features.reshape(list(template_features.shape[:2]) + [75])
+        # We now compute at each point a map of neighbour feature vectors, so we have shape [5, 5, 56, 24, 75]
+        template_feature_map = np.lib.stride_tricks.sliding_window_view(template_features, window_shape=(5, 5), axis=(0, 1)).transpose(
             (3, 4, 0, 1, 2))
-        # return template
 
-        obj_sliding = np.lib.stride_tricks.sliding_window_view(image, window_shape=(5, 5), axis=(0, 1))
-        obj_shape = obj_sliding.shape
-        obj = obj_sliding.reshape(list(obj_shape[:2]) + [75])[2:-2, 2:-2]
+        image_features = np.lib.stride_tricks.sliding_window_view(image, window_shape=(5, 5), axis=(0, 1))
+        image_features = image_features.transpose(0, 1, 3, 4, 2)
+        # image_features is of shape [56, 24, 75]
+        image_features = image_features.reshape(list(image_features.shape[:2]) + [75])[2:-2, 2:-2]
 
-        red_raw_weight = np.exp(-((obj[:, :, :36] - template[:, :, :, :, :36]) ** 2).sum(axis=-1))
-        red_norm_weight = red_raw_weight / (red_raw_weight.sum(axis=(0, 1)) + .0000000000001)
-        red_predictions = (template_sliding[2:-2, 2:-2, 0].transpose((2, 3, 0, 1)) * red_norm_weight).sum(axis=(0, 1))
+        red_raw_weight = np.exp(-((image_features[:, :, :36] - template_feature_map[:, :, :, :, :36]) ** 2).sum(axis=-1))
+        red_norm_weight = red_raw_weight / (red_raw_weight.sum(axis=(0, 1)) + epsilon)
+        red_predictions = (template_feature_map[:, :, :, :, 36] * red_norm_weight).sum(axis=(0, 1))
 
-        green_raw_weight = np.exp(-((obj[:, :, :37] - template[:, :, :, :, :37]) ** 2).sum(axis=-1))
-        green_norm_weight = green_raw_weight / (green_raw_weight.sum(axis=(0, 1)) + .0000000000001)
-        green_predictions = (template_sliding[2:-2, 2:-2, 1].transpose((2, 3, 0, 1)) * green_norm_weight).sum(
-            axis=(0, 1))
+        green_raw_weight = np.exp(-((image_features[:, :, :37] - template_feature_map[:, :, :, :, :37]) ** 2).sum(axis=-1))
+        green_norm_weight = green_raw_weight / (green_raw_weight.sum(axis=(0, 1)) + epsilon)
+        green_predictions = (template_feature_map[:, :, :, :, 37] * green_norm_weight).sum(axis=(0, 1))
 
-        blue_raw_weight = np.exp(-((obj[:, :, :38] - template[:, :, :, :, :38]) ** 2).sum(axis=-1))
-        blue_norm_weight = blue_raw_weight / (blue_raw_weight.sum(axis=(0, 1)) + .0000000000001)
-        blue_predictions = (template_sliding[2:-2, 2:-2, 2].transpose((2, 3, 0, 1)) * blue_norm_weight).sum(axis=(0, 1))
+        blue_raw_weight = np.exp(-((image_features[:, :, :38] - template_feature_map[:, :, :, :, :38]) ** 2).sum(axis=-1))
+        blue_norm_weight = blue_raw_weight / (blue_raw_weight.sum(axis=(0, 1)) + epsilon)
+        blue_predictions = (template_feature_map[:, :, :, :, 38] * blue_norm_weight).sum(axis=(0, 1))
 
         return ((red_predictions - image[4:-4, 4:-4, 0]) ** 2).sum() + (
                     (green_predictions - image[4:-4, 4:-4, 1]) ** 2).sum() + (
                     (blue_predictions - image[4:-4, 4:-4, 2]) ** 2).sum()
 
     def template_lost(self, image):
-
-        obj_sliding = np.lib.stride_tricks.sliding_window_view(image, window_shape=(5, 5), axis=(0, 1)).transpose(0, 1, 3, 4, 2)
-        obj_shape = obj_sliding.shape
-        obj = obj_sliding.reshape(list(obj_shape[:2]) + [75])[2:-2, 2:-2]
+        epsilon = .0000000000001
+        image_features = np.lib.stride_tricks.sliding_window_view(image, window_shape=(5, 5), axis=(0, 1))
+        image_features = image_features.transpose(0, 1, 3, 4, 2)
+        # image_features is of shape [56, 24, 75]
+        image_features = image_features.reshape(list(image_features.shape[:2]) + [75])[2:-2, 2:-2]
 
         limit_ims = 100
 
-        red_raw_weight = np.exp(
-            -((obj[:, :, np.newaxis, :36] - self.reshape[np.newaxis, np.newaxis, :limit_ims, :36]) ** 2).sum(axis=-1))
-        red_norm_weight = (red_raw_weight.transpose(2, 0, 1) / (red_raw_weight.sum(axis=2) + .0000000000001)).transpose(1, 2, 0)
-        red_predictions = (self.reshape[np.newaxis, np.newaxis, :limit_ims, 36] * red_norm_weight).sum(axis=2)
+        red_raw_weight = np.exp(-((image_features[:, :, np.newaxis, :36] - self.feature_map[:limit_ims, :36]) ** 2).sum(axis=-1))
+        red_norm_weight = red_raw_weight / (red_raw_weight.sum(axis=2) + epsilon)[:, :, np.newaxis]
+        red_predictions = (self.feature_map[:limit_ims, 36] * red_norm_weight).sum(axis=2)
 
-        green_raw_weight = np.exp(
-            -((obj[:, :, np.newaxis, :36] - self.reshape[np.newaxis, np.newaxis, :limit_ims, :36]) ** 2).sum(axis=-1))
-        green_norm_weight = (
-                    green_raw_weight.transpose(2, 0, 1) / (green_raw_weight.sum(axis=2) + .0000000000001)).transpose(1, 2, 0)
-        green_predictions = (self.reshape[np.newaxis, np.newaxis, :limit_ims, 36] * green_norm_weight).sum(axis=2)
+        green_raw_weight = np.exp(-((image_features[:, :, np.newaxis, :37] - self.feature_map[:limit_ims, :37]) ** 2).sum(axis=-1))
+        green_norm_weight = green_raw_weight / (green_raw_weight.sum(axis=2) + epsilon)[:, :, np.newaxis]
+        green_predictions = (self.feature_map[:limit_ims, 37] * green_norm_weight).sum(axis=2)
 
-        blue_raw_weight = np.exp(
-            -((obj[:, :, np.newaxis, :36] - self.reshape[np.newaxis, np.newaxis, :limit_ims, :36]) ** 2).sum(axis=-1))
-        blue_norm_weight = (
-                    blue_raw_weight.transpose(2, 0, 1) / (blue_raw_weight.sum(axis=2) + .0000000000001)).transpose(1, 2, 0)
-        blue_predictions = (self.reshape[np.newaxis, np.newaxis, :limit_ims, 36] * blue_norm_weight).sum(axis=2)
+        blue_raw_weight = np.exp(-((image_features[:, :, np.newaxis, :38] - self.feature_map[:limit_ims, :38]) ** 2).sum(axis=-1))
+        blue_norm_weight = blue_raw_weight / (blue_raw_weight.sum(axis=2) + epsilon)[:, :, np.newaxis]
+        blue_predictions = (self.feature_map[:limit_ims, 38] * blue_norm_weight).sum(axis=2)
 
         return ((red_predictions - image[4:-4, 4:-4, 0]) ** 2).sum() + (
                     (green_predictions - image[4:-4, 4:-4, 1]) ** 2).sum() + (
