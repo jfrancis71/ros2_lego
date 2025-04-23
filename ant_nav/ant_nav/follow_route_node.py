@@ -94,7 +94,7 @@ class AntNav1(Node):
         # image_features is of shape [56, 24, 75]
         image_features = image_features.reshape(list(image_features.shape[:2]) + [75])[2:-2, 2:-2]
 
-        limit_ims = 100
+        limit_ims = 25
 
         red_raw_weight = np.exp(-((image_features[:, :, np.newaxis, :36] - self.feature_map[:limit_ims, :36]) ** 2).sum(axis=-1))
         red_norm_weight = red_raw_weight / (red_raw_weight.sum(axis=2) + epsilon)[:, :, np.newaxis]
@@ -187,8 +187,9 @@ class AntNav1(Node):
         pil_image = PILImage.fromarray(cv_image)
         image = np.array(pil_image.resize((64,64))).astype(np.float32)/256.
         image_idx, angle, template_min, lost_template_min, flex_template_min, lost_flex_template_min, lost_image_idx = self.get_drive_instructions(image)
-        print("image_idx:", image_idx, ", angle: ", angle, "template_min=", template_min, "lost_template_min min=",
-              lost_template_min, " flex template min", flex_template_min, " lost template flex min", lost_flex_template_min, " lost image idx = ", lost_image_idx)
+        route_score = lost_flex_template_min - flex_template_min
+        print("image_idx:", image_idx, ", angle: ", angle, "score=", route_score, " template_min=", template_min, "lost_template_min min=",
+              lost_template_min, " flex template min", flex_template_min, " lost template flex min", lost_flex_template_min)
         if lost_template_min < template_min:
             self.lost += 1
         else:
