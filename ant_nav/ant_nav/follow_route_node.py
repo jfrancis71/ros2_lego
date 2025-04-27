@@ -116,7 +116,7 @@ class AntNav1(Node):
         """Reads in images resizes to 64x64. Takes subslices of 32x64 and normalizes"""
         files = glob.glob(f"{self.route_folder}/*.jpg")
         files.sort()
-        resized = np.array([np.array(PILImage.open(fname).resize((64,64)))/256. for fname in files])
+        resized = np.array([np.array(PILImage.open(fname).resize((64,64))).astype(np.float32)/256. for fname in files])
         normalized = np.array([np.array([self.normalize(resized[image_idx, :, offset:32+offset]) for offset in range(32)]) for image_idx in range(len(files))])
         normalized = gaussian_filter(normalized, sigma=(0, 0, 1, 1, 0))
         return normalized.astype(np.float32)
