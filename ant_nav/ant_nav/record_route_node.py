@@ -6,6 +6,7 @@ from sensor_msgs.msg import Image
 from nav_msgs.msg import Odometry
 from cv_bridge import CvBridge
 from scipy.spatial.transform import Rotation as R
+import os
 
 
 class AntNav(Node):
@@ -15,7 +16,7 @@ class AntNav(Node):
             Image,
             "/image",
             self.image_callback,
-            10)
+            1)
         self.pose_subscription = self.create_subscription(
             Odometry,
             "/differential_drive_controller/odom",
@@ -28,6 +29,7 @@ class AntNav(Node):
         self.last_image = None
         self.last_inertial_position = None
         self.last_inertial_orientation = None
+        os.makedirs(self.route_folder, exist_ok=True)
 
     def normalize(self, image):
         """Binarizes onto (-1,1) using median."""
