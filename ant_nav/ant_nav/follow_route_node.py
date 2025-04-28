@@ -1,4 +1,5 @@
 import rclpy
+import scipy.signal
 from PIL import Image as PILImage
 import numpy as np
 from rclpy.node import Node
@@ -95,8 +96,8 @@ class AntNav1(Node):
         centre_image = image[:, 16:48]
         norm_image = self.normalize(centre_image).astype(np.float32)
         sld_route_images = np.lib.stride_tricks.sliding_window_view(self.route_images, window_shape=(64, 32, 3), axis=(1, 2, 3))[:, 0, :, 0]
-        norm_sdl_route_images = sld_route_images/sld_route_images.mean(axis=(2,3,4))[:,:,np.newaxis, np.newaxis, np.newaxis]
-        diffs = ((norm_image - norm_sdl_route_images)**2).mean(axis=(2,3,4))
+        norm_sld_route_images = sld_route_images/sld_route_images.mean(axis=(2,3,4))[:,:,np.newaxis, np.newaxis, np.newaxis]
+        diffs = ((norm_image - norm_sld_route_images)**2).mean(axis=(2,3,4))
         return diffs
 
     def publish_twist(self, header, speed, angular_velocity):
