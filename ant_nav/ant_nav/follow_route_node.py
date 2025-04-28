@@ -43,6 +43,8 @@ class AntNav1(Node):
         self.last_image_idx = self.route_images.shape[0]-1
         self.image_idx = 0
         self.lost = self.lost_seq_len
+        sld_route_images = np.lib.stride_tricks.sliding_window_view(self.route_images, window_shape=(64, 32, 3), axis=(1, 2, 3))[:, 0, :, 0]
+        self.norm_sld_route_images = sld_route_images/sld_route_images.mean(axis=(2,3,4))[:,:,np.newaxis, np.newaxis, np.newaxis]
         if self.diagnostic:
             plt.ion()
             self.fig, self.axs = plt.subplots(1, 5)
@@ -95,9 +97,7 @@ class AntNav1(Node):
     def route_image_diff(self, image):
         centre_image = image[:, 16:48]
         norm_image = self.normalize(centre_image).astype(np.float32)
-        sld_route_images = np.lib.stride_tricks.sliding_window_view(self.route_images, window_shape=(64, 32, 3), axis=(1, 2, 3))[:, 0, :, 0]
-        norm_sld_route_images = sld_route_images/sld_route_images.mean(axis=(2,3,4))[:,:,np.newaxis, np.newaxis, np.newaxis]
-        diffs = ((norm_image - norm_sld_route_images)**2).mean(axis=(2,3,4))
+        diffs = ((norm_image - self.norm_sld_route_images)**2).mean(axis=(2,3,4))
         return diffs
 
     def publish_twist(self, header, speed, angular_velocity):
