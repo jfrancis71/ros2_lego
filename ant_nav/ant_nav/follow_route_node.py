@@ -45,6 +45,11 @@ class AntNav1(Node):
         self.lost = self.lost_seq_len
         sld_route_images = np.lib.stride_tricks.sliding_window_view(self.route_images, window_shape=(64, 32, 3), axis=(1, 2, 3))[:, 0, :, 0]
         self.norm_sld_route_images = sld_route_images/sld_route_images.mean(axis=(2,3,4))[:,:,np.newaxis, np.newaxis, np.newaxis]
+        center_images = self.route_images[:, 15]
+        sliding = np.lib.stride_tricks.sliding_window_view(self.norm_sld_route_images[:,16], window_shape = (5, 5), axis = (1, 2)).transpose(0, 1, 2, 4, 5, 3)
+        self.reshape = sliding.reshape([center_images.shape[0] * 60 * 28, 3 * 5 * 5])
+        # feature map is of shape [#images, 60, 28, 75]
+        self.feature_map = np.random.permutation(self.reshape)
         if self.diagnostic:
             plt.ion()
             self.fig, self.axs = plt.subplots(1, 5)
@@ -85,6 +90,32 @@ class AntNav1(Node):
         return ((red_predictions - image[4:-4, 4:-4, 0]) ** 2).sum() + (
                     (green_predictions - image[4:-4, 4:-4, 1]) ** 2).sum() + (
                     (blue_predictions - image[4:-4, 4:-4, 2]) ** 2).sum()
+
+    def template_lost(self, image):
+        epsilon = .0000000000001
+        image_features = np.lib.stride_tricks.sliding_window_view(image, window_shape=(5, 5), axis=(0, 1))
+        image_features = image_features.transpose(0, 1, 3, 4, 2)
+        # image_features is of shape [56, 24, 75]
+        image_features = image_features.reshape(list(image_features.shape[:2]) + [75])[2:-2, 2:-2]
+
+        limit_ims = 25
+
+        red_raw_weight = np.exp(-((image_features[:, :, np.newaxis, :36] - self.feature_map[:limit_ims,:36]) ** 2).sum(axis=-1))
+        red_norm_weight = red_raw_weight / (red_raw_weight.sum(axis=2) + epsilon)[:,
+                                           :, np.newaxis]
+        red_predictions = (self.feature_map[:limit_ims, 36] * red_norm_weight).sum(axis = 2)
+
+        green_raw_weight = np.exp(-((image_features[:, :, np.newaxis, :37] - self.feature_map[:limit_ims,:37]) ** 2).sum(axis=-1))
+        green_norm_weight = green_raw_weight / (green_raw_weight.sum(axis=2) + epsilon)[:, :, np.newaxis]
+        green_predictions = (self.feature_map[:limit_ims, 37] * green_norm_weight).sum(axis=2)
+
+        blue_raw_weight = np.exp(-((image_features[:, :, np.newaxis, :38] - self.feature_map[:limit_ims,:38]) ** 2).sum(axis=-1))
+        blue_norm_weight = blue_raw_weight / (blue_raw_weight.sum(axis=2) + epsilon)[:, :, np.newaxis]
+        blue_predictions = (self.feature_map[:limit_ims, 38] * blue_norm_weight).sum(axis=2)
+
+        return ((red_predictions - image[4:-4, 4:-4, 0]) ** 2).sum() + (
+            (green_predictions - image[4:-4, 4:-4, 1]) ** 2).sum() + (
+            (blue_predictions - image[4:-4, 4:-4, 2]) ** 2).sum()
 
     def load_images(self):
         """Reads in images resizes to 64x64. Takes subslices of 32x64 and normalizes"""
@@ -144,9 +175,10 @@ class AntNav1(Node):
         centre_image = image[:, 16:48]
         sub_window_idx = np.argmin(image_diffs[image_idx])
         norm_image = self.normalize(centre_image).astype(np.float32)
-        flex_template_min = self.template_match(self.route_images[image_idx, :, sub_window_idx:sub_window_idx+32], norm_image)
+        flex_template_min = self.template_match(self.norm_sld_route_images[image_idx, sub_window_idx], norm_image)
+        lost_template_min = self.template_lost(norm_image)
         lost = self.lost_q(self.route_images[image_idx, :, sub_window_idx:sub_window_idx+32], norm_image)
-        return image_idx, angle-16, template_min, flex_template_min, lost
+        return image_idx, angle-16, template_min, flex_template_min, lost_template_min, lost
 
     def warnings(self, image_msg_timestamp, time_received):
         source_message_time = Time.from_msg(image_msg_timestamp).nanoseconds
@@ -163,8 +195,8 @@ class AntNav1(Node):
         cv_image = self.bridge.imgmsg_to_cv2(image_msg, desired_encoding="rgb8")
         pil_image = PILImage.fromarray(cv_image)
         image = np.array(pil_image.resize((64,64))).astype(np.float32)/256.
-        image_idx, angle, template_min, lost_flex_template_min, lost_edge_min = self.get_drive_instructions(image)
-        print(f'matched image idx {image_idx}, angle={angle}, template_min={template_min}, flex={lost_flex_template_min}, edge_min={lost_edge_min}')
+        image_idx, angle, template_min, flex_template_min, lost_template_min, lost_edge_min = self.get_drive_instructions(image)
+        print(f'matched image idx {image_idx}, angle={angle}, template_min={template_min:.2f}, diff = {(lost_template_min-flex_template_min):.2f}, edge_min={lost_edge_min:.2f}, flex={flex_template_min:.2f}, lost={lost_template_min:.2f}')
         if lost_edge_min > .30:
             self.lost += 1
         else:
