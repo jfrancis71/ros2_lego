@@ -14,6 +14,34 @@ import matplotlib.pyplot as plt
 import cv2
 
 
+class SSD:
+    def __init__(self, templates):
+        sld_route_images = np.lib.stride_tricks.sliding_window_view(templates, window_shape=(64, 32, 3), axis=(1, 2, 3))[:, 0, :, 0]
+        self.norm_sld_route_images = sld_route_images/sld_route_images.mean(axis=(2,3,4))[:,:,np.newaxis, np.newaxis, np.newaxis]
+
+    def ssd(self, image):
+        return ((image - self.norm_sld_route_images)**2).mean(axis=(2,3,4))
+
+
+class FFTSSD:
+    def __init__(self, templates):
+        self.templates_dft = np.fft.fft(templates.transpose(0, 1, 3, 2))
+        self.t = np.zeros([64, 3, 64])
+        sld_route_images = np.lib.stride_tricks.sliding_window_view(templates, window_shape=(64, 32, 3), axis=(1, 2, 3))[:, 0, :, 0]
+        self.norm_sld_route_images = sld_route_images/sld_route_images.mean(axis=(2,3,4))[:,:,np.newaxis, np.newaxis, np.newaxis]
+        self.norm_templates = (self.norm_sld_route_images ** 2).mean(axis=(2, 3, 4))
+        self.means = np.array([templates[:, :, x:x + 32].mean(axis=(1, 2, 3)) for x in range(33)]).transpose()
+
+    def ssd(self, image):
+        self.t[:, :, :32] = np.flip(image.transpose((0, 2, 1)), axis=-1)
+        image_dft = np.fft.fft(self.t)
+        cor_freq = image_dft * self.templates_dft
+        ifft = np.fft.ifft(cor_freq)
+        cor = ifft.sum(axis=(1, 2))
+        return (image ** 2).mean() + self.norm_templates - 2 * np.real(cor[:, 31:]) / (self.means * 64 * 32 * 3)
+
+
+
 class AntNav1(Node):
     def __init__(self):
         super().__init__("ant_nav_1")
@@ -43,10 +71,9 @@ class AntNav1(Node):
         self.last_image_idx = self.route_images.shape[0]-1
         self.image_idx = 0
         self.lost = self.lost_seq_len
-        sld_route_images = np.lib.stride_tricks.sliding_window_view(self.route_images, window_shape=(64, 32, 3), axis=(1, 2, 3))[:, 0, :, 0]
-        self.norm_sld_route_images = sld_route_images/sld_route_images.mean(axis=(2,3,4))[:,:,np.newaxis, np.newaxis, np.newaxis]
+        self.ssd = FFTSSD(self.route_images)
         center_images = self.route_images[:, 15]
-        sliding = np.lib.stride_tricks.sliding_window_view(self.norm_sld_route_images[:,16], window_shape = (5, 5), axis = (1, 2)).transpose(0, 1, 2, 4, 5, 3)
+        sliding = np.lib.stride_tricks.sliding_window_view(self.route_images[:,:,15:15+32], window_shape = (5, 5), axis = (1, 2)).transpose(0, 1, 2, 4, 5, 3)
         self.reshape = sliding.reshape([center_images.shape[0] * 60 * 28, 3 * 5 * 5])
         # feature map is of shape [#images, 60, 28, 75]
         self.feature_map = np.random.permutation(self.reshape)
@@ -128,7 +155,7 @@ class AntNav1(Node):
     def route_image_diff(self, image):
         centre_image = image[:, 16:48]
         norm_image = self.normalize(centre_image).astype(np.float32)
-        diffs = ((norm_image - self.norm_sld_route_images)**2).mean(axis=(2,3,4))
+        diffs = self.ssd.ssd(norm_image)
         return diffs
 
     def publish_twist(self, header, speed, angular_velocity):
@@ -175,7 +202,7 @@ class AntNav1(Node):
         centre_image = image[:, 16:48]
         sub_window_idx = np.argmin(image_diffs[image_idx])
         norm_image = self.normalize(centre_image).astype(np.float32)
-        flex_template_min = self.template_match(self.norm_sld_route_images[image_idx, sub_window_idx], norm_image)
+        flex_template_min = self.template_match(self.route_images[image_idx, :, sub_window_idx:sub_window_idx+32], norm_image)
         lost_template_min = self.template_lost(norm_image)
         lost = self.lost_q(self.route_images[image_idx, :, sub_window_idx:sub_window_idx+32], norm_image)
         return image_idx, angle-16, template_min, flex_template_min, lost_template_min, lost
