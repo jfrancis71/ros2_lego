@@ -28,8 +28,8 @@ class FFTSSD:
         self.templates_dft = np.fft.fft(templates.transpose(0, 1, 3, 2))
         self.t = np.zeros([64, 3, 64])
         sld_route_images = np.lib.stride_tricks.sliding_window_view(templates, window_shape=(64, 32, 3), axis=(1, 2, 3))[:, 0, :, 0]
-        self.norm_sld_route_images = sld_route_images/sld_route_images.mean(axis=(2,3,4))[:,:,np.newaxis, np.newaxis, np.newaxis]
-        self.norm_templates = (self.norm_sld_route_images ** 2).mean(axis=(2, 3, 4))
+        norm_sld_route_images = sld_route_images/sld_route_images.mean(axis=(2,3,4))[:,:,np.newaxis, np.newaxis, np.newaxis]
+        self.norm_templates = (norm_sld_route_images ** 2).mean(axis=(2, 3, 4))
         self.means = np.array([templates[:, :, x:x + 32].mean(axis=(1, 2, 3)) for x in range(33)]).transpose()
 
     def ssd(self, image):
