@@ -16,7 +16,7 @@ import cv2
 
 class SSD:
     def __init__(self, templates):
-        sld_route_images = np.lib.stride_tricks.sliding_window_view(templates, window_shape=(64, 32, 3), axis=(1, 2, 3))[:, 0, :, 0]
+        sld_route_images = np.lib.stride_tricks.sliding_window_view(templates, window_shape=(32, 16, 3), axis=(1, 2, 3))[:, 0, :, 0]
         self.norm_sld_route_images = sld_route_images/sld_route_images.mean(axis=(2,3,4))[:,:,np.newaxis, np.newaxis, np.newaxis]
 
     def ssd(self, image):
@@ -26,19 +26,19 @@ class SSD:
 class FFTSSD:
     def __init__(self, templates):
         self.templates_dft = np.fft.fft(templates.transpose(0, 1, 3, 2))
-        self.t = np.zeros([64, 3, 64])
-        sld_route_images = np.lib.stride_tricks.sliding_window_view(templates, window_shape=(64, 32, 3), axis=(1, 2, 3))[:, 0, :, 0]
+        self.t = np.zeros([32, 3, 32])
+        sld_route_images = np.lib.stride_tricks.sliding_window_view(templates, window_shape=(32, 16, 3), axis=(1, 2, 3))[:, 0, :, 0]
         norm_sld_route_images = sld_route_images/sld_route_images.mean(axis=(2,3,4))[:,:,np.newaxis, np.newaxis, np.newaxis]
         self.norm_templates = (norm_sld_route_images ** 2).mean(axis=(2, 3, 4))
-        self.means = np.array([templates[:, :, x:x + 32].mean(axis=(1, 2, 3)) for x in range(33)]).transpose()
+        self.means = np.array([templates[:, :, x:x + 16].mean(axis=(1, 2, 3)) for x in range(17)]).transpose()
 
     def ssd(self, image):
-        self.t[:, :, :32] = np.flip(image.transpose((0, 2, 1)), axis=-1)
+        self.t[:, :, :16] = np.flip(image.transpose((0, 2, 1)), axis=-1)
         image_dft = np.fft.fft(self.t)
         cor_freq = image_dft * self.templates_dft
         ifft = np.fft.ifft(cor_freq)
         cor = ifft.sum(axis=(1, 2))
-        return (image ** 2).mean() + self.norm_templates - 2 * np.real(cor[:, 31:]) / (self.means * 64 * 32 * 3)
+        return (image ** 2).mean() + self.norm_templates - 2 * np.real(cor[:, 15:]) / (self.means * 32 * 16 * 3)
 
 
 
@@ -71,10 +71,10 @@ class AntNav1(Node):
         self.last_image_idx = self.route_images.shape[0]-1
         self.image_idx = 0
         self.lost = self.lost_seq_len
-        self.ssd = FFTSSD(self.route_images)
+        self.ssd = SSD(self.route_images)
         center_images = self.route_images[:, 15]
-        sliding = np.lib.stride_tricks.sliding_window_view(self.route_images[:,:,15:15+32], window_shape = (5, 5), axis = (1, 2)).transpose(0, 1, 2, 4, 5, 3)
-        self.reshape = sliding.reshape([center_images.shape[0] * 60 * 28, 3 * 5 * 5])
+        sliding = np.lib.stride_tricks.sliding_window_view(self.route_images[:,:,15:15+16], window_shape = (5, 5), axis = (1, 2)).transpose(0, 1, 2, 4, 5, 3)
+        self.reshape = sliding.reshape([center_images.shape[0] * 28 * 12, 3 * 5 * 5])
         # feature map is of shape [#images, 60, 28, 75]
         self.feature_map = np.random.permutation(self.reshape)
         if self.diagnostic:
@@ -145,15 +145,15 @@ class AntNav1(Node):
             (blue_predictions - image[4:-4, 4:-4, 2]) ** 2).sum()
 
     def load_images(self):
-        """Reads in images resizes to 64x64. Takes subslices of 32x64 and normalizes"""
+        """Reads in images resizes to 64x64."""
         files = glob.glob(f"{self.route_folder}/*.jpg")
         files.sort()
-        resized = np.array([np.array(PILImage.open(fname).resize((64,64))).astype(np.float32)/256. for fname in files])
+        resized = np.array([np.array(PILImage.open(fname).resize((32,32))).astype(np.float32)/256. for fname in files])
         filtered = gaussian_filter(resized, sigma=(0, 1, 1, 0))
         return filtered
 
     def route_image_diff(self, image):
-        centre_image = image[:, 16:48]
+        centre_image = image[:, 8:24]
         norm_image = self.normalize(centre_image).astype(np.float32)
         diffs = self.ssd.ssd(norm_image)
         return diffs
@@ -180,8 +180,8 @@ class AntNav1(Node):
         mag_image = np.linalg.norm(np.array([sobel_x_image, sobel_y_image]), axis=0)
         dir_template = np.arctan2(sobel_x_template, sobel_y_template)
         dir_image = np.arctan2(sobel_x_image, sobel_y_image)
-        angle_diff_1 = (mag_template > 20.0) * (1 - np.cos(dir_template - dir_image))
-        angle_diff_2 = (mag_image > 20.0) * (1 - np.cos(dir_template - dir_image))
+        angle_diff_1 = (mag_template > 40.0) * (1 - np.cos(dir_template - dir_image))
+        angle_diff_2 = (mag_image > 40.0) * (1 - np.cos(dir_template - dir_image))
         if self.diagnostic:
             axs[0].imshow(template)
             axs[1].imshow(image)
@@ -199,13 +199,13 @@ class AntNav1(Node):
         template_min = np.sqrt(image_diffs.min())
         image_idx, angle = np.unravel_index(np.argmin(image_diffs, axis=None), image_diffs.shape)
         angle = np.argmin(image_diffs[(image_idx + 1) % self.last_image_idx])
-        centre_image = image[:, 16:48]
+        centre_image = image[:, 8:24]
         sub_window_idx = np.argmin(image_diffs[image_idx])
         norm_image = self.normalize(centre_image).astype(np.float32)
-        flex_template_min = self.template_match(self.route_images[image_idx, :, sub_window_idx:sub_window_idx+32], norm_image)
+        flex_template_min = self.template_match(self.route_images[image_idx, :, sub_window_idx:sub_window_idx+16], norm_image)
         lost_template_min = self.template_lost(norm_image)
-        lost = self.lost_q(self.route_images[image_idx, :, sub_window_idx:sub_window_idx+32], norm_image)
-        return image_idx, angle-16, template_min, flex_template_min, lost_template_min, lost
+        lost = self.lost_q(self.route_images[image_idx, :, sub_window_idx:sub_window_idx+16], norm_image)
+        return image_idx, angle-8, template_min, flex_template_min, lost_template_min, lost
 
     def warnings(self, image_msg_timestamp, time_received):
         source_message_time = Time.from_msg(image_msg_timestamp).nanoseconds
@@ -221,10 +221,10 @@ class AntNav1(Node):
         time_received = self.get_clock().now().nanoseconds
         cv_image = self.bridge.imgmsg_to_cv2(image_msg, desired_encoding="rgb8")
         pil_image = PILImage.fromarray(cv_image)
-        image = np.array(pil_image.resize((64,64))).astype(np.float32)/256.
+        image = np.array(pil_image.resize((32,32))).astype(np.float32)/256.
         image_idx, angle, template_min, flex_template_min, lost_template_min, lost_edge_min = self.get_drive_instructions(image)
         print(f'matched image idx {image_idx}, angle={angle}, template_min={template_min:.2f}, diff = {(lost_template_min-flex_template_min):.2f}, edge_min={lost_edge_min:.2f}, flex={flex_template_min:.2f}, lost={lost_template_min:.2f}')
-        if lost_edge_min > .30:
+        if lost_edge_min > .15:
             self.lost += 1
         else:
             self.lost = 0
@@ -232,7 +232,7 @@ class AntNav1(Node):
         angular_velocity = 0.0
         if self.lost < self.lost_seq_len and (image_idx != self.last_image_idx or self.route_loop):
             speed = 0.05
-            angular_velocity = angle/48
+            angular_velocity = angle/24
             if image_idx == self.last_image_idx-1:
                 angular_velocity = 0.0
         if self.drive:
