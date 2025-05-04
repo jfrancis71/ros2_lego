@@ -180,8 +180,10 @@ class AntNav1(Node):
         mag_image = np.linalg.norm(np.array([sobel_x_image, sobel_y_image]), axis=0)
         dir_template = np.arctan2(sobel_x_template, sobel_y_template)
         dir_image = np.arctan2(sobel_x_image, sobel_y_image)
-        angle_diff_1 = (mag_template > 20.0) * (1 - np.cos(dir_template - dir_image))
-        angle_diff_2 = (mag_image > 20.0) * (1 - np.cos(dir_template - dir_image))
+        edges_template = mag_template > 20.0
+        edges_image = mag_image > 20.0
+        angle_diff_1 = edges_template * (1 - np.cos(dir_template - dir_image))
+        angle_diff_2 = edges_image * (1 - np.cos(dir_template - dir_image))
         if self.diagnostic:
             axs[0].imshow(template)
             axs[1].imshow(image)
@@ -189,9 +191,15 @@ class AntNav1(Node):
             axs[3].imshow(angle_diff_1, cmap='gray', vmin=0.0, vmax=1.0)
             axs[4].imshow(angle_diff_2, cmap='gray', vmin=0.0, vmax=1.0)
             plt.pause(.001)
-        angle_diff_1 = angle_diff_1/(mag_template > 20.0).sum()
-        angle_diff_2 = angle_diff_2 / (mag_image > 20.0).sum()
-        return (angle_diff_1 + angle_diff_2).sum()
+        if edges_template.sum() > 0.0:
+            angle_diff_1 = angle_diff_1.sum()/edges_template.sum()
+        else:
+            angle_diff_1 = np.array(0.0)
+        if edges_image.sum() > 0.0:
+            angle_diff_2 = angle_diff_2.sum()/edges_image.sum()
+        else:
+            angle_diff_2 = np.array(0.0)
+        return angle_diff_1 + angle_diff_2
 
     def get_drive_instructions(self, np_image):
         image = gaussian_filter(np_image, sigma=(1, 1, 0))
