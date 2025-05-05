@@ -55,18 +55,20 @@ class AntNav1(Node):
         self.bridge = CvBridge()
         self.declare_parameter('route_folder', './default_route_folder')
         self.declare_parameter('route_loop', False)
-        self.declare_parameter('max_match_threshold', 60.0)
+        self.declare_parameter('lost_edge_threshold', .15)
         self.declare_parameter('drive', True)
         self.declare_parameter('lost_seq_len', 5)
         self.declare_parameter('warning_time', .25)
         self.declare_parameter('diagnostic', False)
+        self.declare_parameter('angle_ratio', 48)
         self.route_folder = self.get_parameter('route_folder').get_parameter_value().string_value
         self.route_loop = self.get_parameter('route_loop').get_parameter_value().bool_value
-        self.max_match_threshold = self.get_parameter('max_match_threshold').get_parameter_value().double_value
+        self.lost_edge_threshold = self.get_parameter('lost_edge_threshold').get_parameter_value().double_value
         self.drive = self.get_parameter('drive').get_parameter_value().bool_value
         self.lost_seq_len  = self.get_parameter('lost_seq_len').get_parameter_value().integer_value
         self.warning_time = self.get_parameter('warning_time').get_parameter_value().double_value
         self.diagnostic = self.get_parameter('diagnostic').get_parameter_value().bool_value
+        self.angle_ratio = self.get_parameter('angle_ratio').get_parameter_value().double_value
         self.route_images = self.load_images()
         self.last_image_idx = self.route_images.shape[0]-1
         self.image_idx = 0
@@ -232,7 +234,7 @@ class AntNav1(Node):
         image = np.array(pil_image.resize((32,32))).astype(np.float32)/256.
         image_idx, angle, template_min, flex_template_min, lost_template_min, lost_edge_min = self.get_drive_instructions(image)
         print(f'matched image idx {image_idx}, angle={angle}, template_min={template_min:.2f}, diff = {(lost_template_min-flex_template_min):.2f}, edge_min={lost_edge_min:.2f}, flex={flex_template_min:.2f}, lost={lost_template_min:.2f}')
-        if lost_edge_min > .15:
+        if lost_edge_min > self.lost_edge_threshold:
             self.lost += 1
         else:
             self.lost = 0
@@ -240,7 +242,7 @@ class AntNav1(Node):
         angular_velocity = 0.0
         if self.lost < self.lost_seq_len and (image_idx != self.last_image_idx or self.route_loop):
             speed = 0.05
-            angular_velocity = angle/24
+            angular_velocity = angle/self.angle_ratio
             if image_idx == self.last_image_idx-1:
                 angular_velocity = 0.0
         if self.drive:
