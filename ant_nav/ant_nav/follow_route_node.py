@@ -60,7 +60,7 @@ class AntNav1(Node):
         self.declare_parameter('lost_seq_len', 5)
         self.declare_parameter('warning_time', .25)
         self.declare_parameter('diagnostic', False)
-        self.declare_parameter('angle_ratio', 48)
+        self.declare_parameter('angle_ratio', 36.)
         self.route_folder = self.get_parameter('route_folder').get_parameter_value().string_value
         self.route_loop = self.get_parameter('route_loop').get_parameter_value().bool_value
         self.lost_edge_threshold = self.get_parameter('lost_edge_threshold').get_parameter_value().double_value
