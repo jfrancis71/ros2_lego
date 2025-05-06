@@ -21,7 +21,7 @@ def generate_launch_description():
     camera_node = Node(
         package='image_tools',
         executable='cam2image',
-        parameters=[{"frequency": 10.0}],
+        parameters=[{"frequency": 30.0}],
         remappings=[
             ('/image', '/thomas/image')]
     )
