@@ -238,14 +238,9 @@ class AntNav1(Node):
             self.lost += 1
         else:
             self.lost = 0
-        speed = 0.0
-        angular_velocity = 0.0
-        if self.lost < self.lost_seq_len and (image_idx != self.last_image_idx or self.route_loop):
+        if self.drive and self.lost < self.lost_seq_len and (image_idx != self.last_image_idx or self.route_loop):
             speed = 0.05
             angular_velocity = angle/self.angle_ratio
-            if image_idx == self.last_image_idx-1:
-                angular_velocity = 0.0
-        if self.drive:
             self.publish_twist(image_msg.header, speed, angular_velocity)
         self.warnings(image_msg.header.stamp, time_received)
 
