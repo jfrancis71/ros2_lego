@@ -41,18 +41,43 @@ class FFTSSD:
         return (image ** 2).mean() + self.norm_templates - 2 * np.real(cor[:, 15:]) / (self.means * 32 * 16 * 3)
 
 
+class Lost:
+    def __init__(self):
+        self.angle_diff_template = None
+        self.angle_diff_image = None
+        self.edges_image = None
+        self.edges_template = None
+        self.edge_threshold = 30.0
+
+    def lost_q(self, template, image):
+        grey_template = np.linalg.norm(template, axis=2)
+        grey_image = np.linalg.norm(image, axis=2)
+        sobel_x_template = cv2.Sobel(grey_template, cv2.CV_64F, 1, 0, ksize=5)
+        sobel_y_template = cv2.Sobel(grey_template, cv2.CV_64F, 0, 1, ksize=5)
+        sobel_x_image = cv2.Sobel(grey_image, cv2.CV_64F, 1, 0, ksize=5)
+        sobel_y_image = cv2.Sobel(grey_image, cv2.CV_64F, 0, 1, ksize=5)
+        mag_template = np.linalg.norm(np.array([sobel_x_template, sobel_y_template]), axis=0)
+        mag_image = np.linalg.norm(np.array([sobel_x_image, sobel_y_image]), axis=0)
+        dir_template = np.arctan2(sobel_x_template, sobel_y_template)
+        dir_image = np.arctan2(sobel_x_image, sobel_y_image)
+        self.edges_template = mag_template > self.edge_threshold
+        self.edges_image = mag_image > self.edge_threshold
+        self.angle_diff_template = self.edges_template * (1 - np.cos(dir_template - dir_image))
+        self.angle_diff_image = self.edges_image * (1 - np.cos(dir_template - dir_image))
+        if self.edges_template.sum() > 0.0:
+            angle_diff_template_sum = self.angle_diff_template.sum()/self.edges_template.sum()
+        else:
+            angle_diff_template_sum = np.array(0.0)
+        if self.edges_image.sum() > 0.0:
+            angle_diff_image_sum = self.angle_diff_image.sum()/self.edges_image.sum()
+        else:
+            angle_diff_image_sum = np.array(0.0)
+        return angle_diff_template_sum + angle_diff_image_sum
+
 
 class AntNav1(Node):
     def __init__(self):
         super().__init__("ant_nav_1")
-        self.image_subscription = self.create_subscription(
-            Image,
-            "/image",
-            self.image_callback,
-            1)
-        self.publisher = self.create_publisher(TwistStamped, "/cmd_vel", 10)
-        self.image_publisher = self.create_publisher(Image, "/debug_image", 10)
-        self.bridge = CvBridge()
         self.declare_parameter('route_folder', './default_route_folder')
         self.declare_parameter('route_loop', False)
         self.declare_parameter('lost_edge_threshold', .15)
@@ -60,6 +85,7 @@ class AntNav1(Node):
         self.declare_parameter('lost_seq_len', 5)
         self.declare_parameter('warning_time', .25)
         self.declare_parameter('diagnostic', False)
+        self.declare_parameter("publish_debug", True)
         self.declare_parameter('angle_ratio', 36.)
         self.route_folder = self.get_parameter('route_folder').get_parameter_value().string_value
         self.route_loop = self.get_parameter('route_loop').get_parameter_value().bool_value
@@ -68,7 +94,9 @@ class AntNav1(Node):
         self.lost_seq_len  = self.get_parameter('lost_seq_len').get_parameter_value().integer_value
         self.warning_time = self.get_parameter('warning_time').get_parameter_value().double_value
         self.diagnostic = self.get_parameter('diagnostic').get_parameter_value().bool_value
+        publish_debug = self.get_parameter('publish_debug').get_parameter_value().bool_value
         self.angle_ratio = self.get_parameter('angle_ratio').get_parameter_value().double_value
+        self.blur = 1
         self.route_images = self.load_images()
         self.last_image_idx = self.route_images.shape[0]-1
         self.image_idx = 0
@@ -82,6 +110,18 @@ class AntNav1(Node):
         if self.diagnostic:
             plt.ion()
             self.fig, self.axs = plt.subplots(1, 5)
+        self.image_subscription = self.create_subscription(
+            Image,
+            "/image",
+            self.image_callback,
+            1)
+        self.publisher = self.create_publisher(TwistStamped, "/cmd_vel", 10)
+        if publish_debug:
+            self.debug_image_publisher = self.create_publisher(Image, "/debug_image", 10)
+        else:
+            self.debug_image_publisher = None
+        self.bridge = CvBridge()
+        self.lostObj = Lost()
         print("Initialized.")
 
     def normalize(self, image):
@@ -151,13 +191,11 @@ class AntNav1(Node):
         files = glob.glob(f"{self.route_folder}/*.jpg")
         files.sort()
         resized = np.array([np.array(PILImage.open(fname).resize((32,32))).astype(np.float32)/256. for fname in files])
-        filtered = gaussian_filter(resized, sigma=(0, 1, 1, 0))
+        filtered = gaussian_filter(resized, sigma=(0, self.blur, self.blur, 0))
         return filtered
 
     def route_image_diff(self, image):
-        centre_image = image[:, 8:24]
-        norm_image = self.normalize(centre_image).astype(np.float32)
-        diffs = self.ssd.ssd(norm_image)
+
         return diffs
 
     def publish_twist(self, header, speed, angular_velocity):
@@ -171,51 +209,36 @@ class AntNav1(Node):
         c = 1/(2 * np.pi * np.i0(m))
         return c * np.exp(m * np.cos(theta - theta0))
 
-    def lost_q(self, template, image):
-        grey_template = np.linalg.norm(template, axis=2)
-        grey_image = np.linalg.norm(image, axis=2)
-        sobel_x_template = cv2.Sobel(grey_template, cv2.CV_64F, 1, 0, ksize=5)
-        sobel_y_template = cv2.Sobel(grey_template, cv2.CV_64F, 0, 1, ksize=5)
-        sobel_x_image = cv2.Sobel(grey_image, cv2.CV_64F, 1, 0, ksize=5)
-        sobel_y_image = cv2.Sobel(grey_image, cv2.CV_64F, 0, 1, ksize=5)
-        mag_template = np.linalg.norm(np.array([sobel_x_template, sobel_y_template]), axis=0)
-        mag_image = np.linalg.norm(np.array([sobel_x_image, sobel_y_image]), axis=0)
-        dir_template = np.arctan2(sobel_x_template, sobel_y_template)
-        dir_image = np.arctan2(sobel_x_image, sobel_y_image)
-        edges_template = mag_template > 20.0
-        edges_image = mag_image > 20.0
-        angle_diff_1 = edges_template * (1 - np.cos(dir_template - dir_image))
-        angle_diff_2 = edges_image * (1 - np.cos(dir_template - dir_image))
-        if self.diagnostic:
-            axs[0].imshow(template)
-            axs[1].imshow(image)
-            axs[2].imshow(mag_template, cmap='gray', vmin=0.0, vmax=20.0)
-            axs[3].imshow(angle_diff_1, cmap='gray', vmin=0.0, vmax=1.0)
-            axs[4].imshow(angle_diff_2, cmap='gray', vmin=0.0, vmax=1.0)
-            plt.pause(.001)
-        if edges_template.sum() > 0.0:
-            angle_diff_1 = angle_diff_1.sum()/edges_template.sum()
-        else:
-            angle_diff_1 = np.array(0.0)
-        if edges_image.sum() > 0.0:
-            angle_diff_2 = angle_diff_2.sum()/edges_image.sum()
-        else:
-            angle_diff_2 = np.array(0.0)
-        return angle_diff_1 + angle_diff_2
 
-    def get_drive_instructions(self, np_image):
-        image = gaussian_filter(np_image, sigma=(1, 1, 0))
-        image_diffs = self.route_image_diff(image)
+    def debug_image(self, image, template):
+        canvas = np.zeros([512, 513, 3])
+        resized_image = cv2.resize(image, (256, 256), interpolation=cv2.INTER_NEAREST)
+        resized_template = cv2.resize(template, (256, 256), interpolation=cv2.INTER_NEAREST)
+        resized_lost_image_angle = cv2.resize(self.lostObj.angle_diff_image, (256, 256), interpolation=cv2.INTER_NEAREST)
+        resized_lost_template_angle = cv2.resize(self.lostObj.angle_diff_template, (256, 256), interpolation=cv2.INTER_NEAREST)
+        resized_lost_image_edge = cv2.resize(self.lostObj.edges_image*1.0, (256, 256),
+                                              interpolation=cv2.INTER_NEAREST)
+        resized_lost_template_edge = cv2.resize(self.lostObj.edges_template*1.0, (256, 256),
+                                                 interpolation=cv2.INTER_NEAREST)
+
+        canvas[:256,:256 ] = resized_image
+        canvas[:256,257:] = resized_template
+        canvas[256:, :256, 0] = resized_lost_image_edge
+        canvas[256:, :256, 1] = canvas[256:, :256, 2] = (1.0 - resized_lost_image_angle)*resized_lost_image_edge
+        canvas[256:, 257:, 0] = resized_lost_template_edge
+        canvas[256:, 257:, 1] = canvas[256:, 257:, 2] = (1.0 - resized_lost_template_angle)*resized_lost_template_edge
+        cv2.line(canvas, (256, 0), (256, 512), color=(0, 1, 0))
+        return canvas
+
+    def get_drive_instructions(self, image):
+        image_diffs = self.ssd.ssd(image)
         template_min = np.sqrt(image_diffs.min())
         image_idx, angle = np.unravel_index(np.argmin(image_diffs, axis=None), image_diffs.shape)
         angle = np.argmin(image_diffs[(image_idx + 1) % self.last_image_idx])
-        centre_image = image[:, 8:24]
         sub_window_idx = np.argmin(image_diffs[image_idx])
-        norm_image = self.normalize(centre_image).astype(np.float32)
-        flex_template_min = self.template_match(self.route_images[image_idx, :, sub_window_idx:sub_window_idx+16], norm_image)
-        lost_template_min = self.template_lost(norm_image)
-        lost = self.lost_q(self.route_images[image_idx, :, sub_window_idx:sub_window_idx+16], norm_image)
-        return image_idx, angle-8, template_min, flex_template_min, lost_template_min, lost
+        flex_template_min = self.template_match(self.route_images[image_idx, :, sub_window_idx:sub_window_idx+16], image)
+        lost_template_min = self.template_lost(image)
+        return image_idx, sub_window_idx, angle-8, template_min, flex_template_min, lost_template_min
 
     def warnings(self, image_msg_timestamp, time_received):
         source_message_time = Time.from_msg(image_msg_timestamp).nanoseconds
@@ -232,7 +255,12 @@ class AntNav1(Node):
         cv_image = self.bridge.imgmsg_to_cv2(image_msg, desired_encoding="rgb8")
         pil_image = PILImage.fromarray(cv_image)
         image = np.array(pil_image.resize((32,32))).astype(np.float32)/256.
-        image_idx, angle, template_min, flex_template_min, lost_template_min, lost_edge_min = self.get_drive_instructions(image)
+        smoothed_image = gaussian_filter(image, sigma=(self.blur, self.blur, 0))
+        centre_image = smoothed_image[:, 8:24]
+        norm_image = self.normalize(centre_image).astype(np.float32)
+        image_idx, sub_window_idx, angle, template_min, flex_template_min, lost_template_min = self.get_drive_instructions(norm_image)
+
+        lost_edge_min = self.lostObj.lost_q(self.ssd.norm_sld_route_images[image_idx, sub_window_idx], norm_image)
         print(f'matched image idx {image_idx}, angle={angle}, template_min={template_min:.2f}, diff = {(lost_template_min-flex_template_min):.2f}, edge_min={lost_edge_min:.2f}, flex={flex_template_min:.2f}, lost={lost_template_min:.2f}')
         if lost_edge_min > self.lost_edge_threshold:
             self.lost += 1
@@ -242,6 +270,11 @@ class AntNav1(Node):
             speed = 0.05
             angular_velocity = angle/self.angle_ratio
             self.publish_twist(image_msg.header, speed, angular_velocity)
+        if self.debug_image_publisher:
+            debug_image = self.debug_image(centre_image, self.route_images[image_idx, :, sub_window_idx:sub_window_idx + 16])
+            debug_image_msg = self.bridge.cv2_to_imgmsg((debug_image*255).astype(np.uint8),
+                                                       encoding="rgb8")
+            self.debug_image_publisher.publish(debug_image_msg)
         self.warnings(image_msg.header.stamp, time_received)
 
 
