@@ -31,6 +31,10 @@ Looking and homing: how displaced ants decide where to go
 Zeil, Narendra, Sturzi (2014)
 https://pmc.ncbi.nlm.nih.gov/articles/PMC3886322/
 
+Visual cues for the retrieval of landmark memories by navigating wood ants (2007)
+Harris RA, Graham P, Collett TS.
+https://pubmed.ncbi.nlm.nih.gov/17240334/
+
 MIT Robotics – Tim Barfoot - Robot Navigation When Lighting, Weather, and Geometry Won’t Cooperate
 Tim Barfoot (2024)
 https://www.youtube.com/watch?v=oelXylttvS4&t=2618s
