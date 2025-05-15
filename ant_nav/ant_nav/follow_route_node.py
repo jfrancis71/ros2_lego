@@ -12,6 +12,7 @@ import time
 from scipy.ndimage import gaussian_filter
 import matplotlib.pyplot as plt
 import cv2
+import scipy.stats
 
 
 class SSD:
@@ -73,6 +74,20 @@ class Lost:
         else:
             angle_diff_image_sum = np.array(0.0)
         return angle_diff_template_sum + angle_diff_image_sum
+
+    def debug(self):
+        resized_lost_image_angle = cv2.resize(self.angle_diff_image, (256, 256), interpolation=cv2.INTER_NEAREST)
+        resized_lost_template_angle = cv2.resize(self.angle_diff_template, (256, 256), interpolation=cv2.INTER_NEAREST)
+        resized_lost_image_edge = cv2.resize(self.edges_image*1.0, (256, 256),
+                                              interpolation=cv2.INTER_NEAREST)
+        resized_lost_template_edge = cv2.resize(self.edges_template*1.0, (256, 256),
+                                                 interpolation=cv2.INTER_NEAREST)
+        debug_image = np.zeros([256, 513, 3])
+        debug_image[:, :256, 0] = resized_lost_image_edge
+        debug_image[:, :256, 1] = debug_image[:, :256, 2] = (1.0 - resized_lost_image_angle)*resized_lost_image_edge
+        debug_image[:, 257:, 0] = resized_lost_template_edge
+        debug_image[:, 257:, 1] = debug_image[:, 257:, 2] = (1.0 - resized_lost_template_angle)*resized_lost_template_edge
+        return debug_image
 
 
 class AntNav1(Node):
@@ -211,22 +226,14 @@ class AntNav1(Node):
 
 
     def debug_image(self, image, template):
-        canvas = np.zeros([512, 513, 3])
+        top = np.zeros([256, 513, 3])
         resized_image = cv2.resize(image, (256, 256), interpolation=cv2.INTER_NEAREST)
         resized_template = cv2.resize(template, (256, 256), interpolation=cv2.INTER_NEAREST)
-        resized_lost_image_angle = cv2.resize(self.lostObj.angle_diff_image, (256, 256), interpolation=cv2.INTER_NEAREST)
-        resized_lost_template_angle = cv2.resize(self.lostObj.angle_diff_template, (256, 256), interpolation=cv2.INTER_NEAREST)
-        resized_lost_image_edge = cv2.resize(self.lostObj.edges_image*1.0, (256, 256),
-                                              interpolation=cv2.INTER_NEAREST)
-        resized_lost_template_edge = cv2.resize(self.lostObj.edges_template*1.0, (256, 256),
-                                                 interpolation=cv2.INTER_NEAREST)
 
-        canvas[:256,:256 ] = resized_image
-        canvas[:256,257:] = resized_template
-        canvas[256:, :256, 0] = resized_lost_image_edge
-        canvas[256:, :256, 1] = canvas[256:, :256, 2] = (1.0 - resized_lost_image_angle)*resized_lost_image_edge
-        canvas[256:, 257:, 0] = resized_lost_template_edge
-        canvas[256:, 257:, 1] = canvas[256:, 257:, 2] = (1.0 - resized_lost_template_angle)*resized_lost_template_edge
+        top[:256,:256 ] = resized_image
+        top[:256,257:] = resized_template
+        lost_debug_image = self.lostObj.debug()
+        canvas = cv2.vconcat([top, lost_debug_image])
         cv2.line(canvas, (256, 0), (256, 512), color=(0, 1, 0))
         return canvas
 
