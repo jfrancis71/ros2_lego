@@ -91,8 +91,12 @@ class Lost:
 
 
 class LostTemplateMatch:
-    def __init__(self, feature_map):
-        self.feature_map = feature_map
+    def __init__(self, route_images):
+        sliding = np.lib.stride_tricks.sliding_window_view(route_images[:,:,15:15+16], window_shape = (5, 5), axis = (1, 2)).transpose(0, 1, 2, 4, 5, 3)
+        self.reshape = sliding.reshape([route_images.shape[0] * 28 * 12, 3 * 5 * 5])
+        # feature map is of shape [#images, 60, 28, 75]
+        self.feature_map = np.random.permutation(self.reshape)
+
 
     def template_match(self, template, image):
         epsilon = .0000000000001
@@ -195,11 +199,6 @@ class AntNav1(Node):
         self.image_idx = 0
         self.lost = self.lost_seq_len
         self.ssd = SSD(self.route_images)
-        center_images = self.route_images[:, 15]
-        sliding = np.lib.stride_tricks.sliding_window_view(self.route_images[:,:,15:15+16], window_shape = (5, 5), axis = (1, 2)).transpose(0, 1, 2, 4, 5, 3)
-        self.reshape = sliding.reshape([center_images.shape[0] * 28 * 12, 3 * 5 * 5])
-        # feature map is of shape [#images, 60, 28, 75]
-        feature_map = np.random.permutation(self.reshape)
         if self.diagnostic:
             plt.ion()
             self.fig, self.axs = plt.subplots(1, 5)
@@ -215,7 +214,7 @@ class AntNav1(Node):
             self.debug_image_publisher = None
         self.bridge = CvBridge()
         self.lostObj = Lost()
-        self.flexTemplate = LostTemplateMatch(feature_map)
+        self.flexTemplate = LostTemplateMatch(self.route_images)
         print("Initialized.")
 
     def normalize(self, image):
