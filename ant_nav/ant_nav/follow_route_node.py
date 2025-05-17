@@ -256,6 +256,10 @@ class AntNav1(Node):
         lost_flex = self.flexTemplate.debug()
         canvas = cv2.vconcat([top, lost_debug_image, lost_flex])
         cv2.line(canvas, (256, 0), (256, 512), color=(0, 1, 0))
+        cv2.line(canvas, (4*16, 0), (4*16, 256), color=(1,0,0))
+        cv2.line(canvas, (256 + 4 * 16, 0), (256 + 4 * 16, 256), color=(1, 0, 0))
+        cv2.line(canvas, (0, 4*8), (512, 4*8), color=(1, 0, 0))
+
         return canvas
 
     def get_drive_instructions(self, image):
