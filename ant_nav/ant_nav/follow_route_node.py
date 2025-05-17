@@ -90,6 +90,84 @@ class Lost:
         return debug_image
 
 
+class LostTemplateMatch:
+    def __init__(self, feature_map):
+        self.feature_map = feature_map
+
+    def template_match(self, template, image):
+        epsilon = .0000000000001
+        template_features = np.lib.stride_tricks.sliding_window_view(template, window_shape=(5, 5), axis=(0, 1))
+        template_features = template_features.transpose(0, 1, 3, 4, 2)
+        # template feature map is of shape [60, 28, 75] Features are flattened in last dimension as we will be building
+        # arrays of feature maps at each position and it may be confusing to have different spatial maps in same array.
+        template_features = template_features.reshape(list(template_features.shape[:2]) + [75])
+        # We now compute at each point a map of neighbour feature vectors, so we have shape [5, 5, 56, 24, 75]
+        template_feature_map = np.lib.stride_tricks.sliding_window_view(template_features, window_shape=(5, 5), axis=(0, 1)).transpose(
+            (3, 4, 0, 1, 2))
+
+        image_features = np.lib.stride_tricks.sliding_window_view(image, window_shape=(5, 5), axis=(0, 1))
+        image_features = image_features.transpose(0, 1, 3, 4, 2)
+        # image_features is of shape [56, 24, 75]
+        image_features = image_features.reshape(list(image_features.shape[:2]) + [75])[2:-2, 2:-2]
+
+        red_raw_weight = np.exp(-((image_features[:, :, :36] - template_feature_map[:, :, :, :, :36]) ** 2).sum(axis=-1))
+        red_norm_weight = red_raw_weight / (red_raw_weight.sum(axis=(0, 1)) + epsilon)
+        red_predictions = (template_feature_map[:, :, :, :, 36] * red_norm_weight).sum(axis=(0, 1))
+
+        green_raw_weight = np.exp(-((image_features[:, :, :37] - template_feature_map[:, :, :, :, :37]) ** 2).sum(axis=-1))
+        green_norm_weight = green_raw_weight / (green_raw_weight.sum(axis=(0, 1)) + epsilon)
+        green_predictions = (template_feature_map[:, :, :, :, 37] * green_norm_weight).sum(axis=(0, 1))
+
+        blue_raw_weight = np.exp(-((image_features[:, :, :38] - template_feature_map[:, :, :, :, :38]) ** 2).sum(axis=-1))
+        blue_norm_weight = blue_raw_weight / (blue_raw_weight.sum(axis=(0, 1)) + epsilon)
+        blue_predictions = (template_feature_map[:, :, :, :, 38] * blue_norm_weight).sum(axis=(0, 1))
+
+        self.match_error = (red_predictions - image[4:-4, 4:-4, 0]) ** 2 + \
+                (green_predictions - image[4:-4, 4:-4, 1]) ** 2 + \
+                (blue_predictions - image[4:-4, 4:-4, 2]) ** 2
+
+    def template_lost(self, image):
+        epsilon = .0000000000001
+        image_features = np.lib.stride_tricks.sliding_window_view(image, window_shape=(5, 5), axis=(0, 1))
+        image_features = image_features.transpose(0, 1, 3, 4, 2)
+        # image_features is of shape [56, 24, 75]
+        image_features = image_features.reshape(list(image_features.shape[:2]) + [75])[2:-2, 2:-2]
+
+        limit_ims = 2500
+
+        red_raw_weight = np.exp(-((image_features[:, :, np.newaxis, :36] - self.feature_map[:limit_ims,:36]) ** 2).sum(axis=-1))
+        red_norm_weight = red_raw_weight / (red_raw_weight.sum(axis=2) + epsilon)[:,
+                                           :, np.newaxis]
+        red_predictions = (self.feature_map[:limit_ims, 36] * red_norm_weight).sum(axis = 2)
+
+        green_raw_weight = np.exp(-((image_features[:, :, np.newaxis, :37] - self.feature_map[:limit_ims,:37]) ** 2).sum(axis=-1))
+        green_norm_weight = green_raw_weight / (green_raw_weight.sum(axis=2) + epsilon)[:, :, np.newaxis]
+        green_predictions = (self.feature_map[:limit_ims, 37] * green_norm_weight).sum(axis=2)
+
+        blue_raw_weight = np.exp(-((image_features[:, :, np.newaxis, :38] - self.feature_map[:limit_ims,:38]) ** 2).sum(axis=-1))
+        blue_norm_weight = blue_raw_weight / (blue_raw_weight.sum(axis=2) + epsilon)[:, :, np.newaxis]
+        blue_predictions = (self.feature_map[:limit_ims, 38] * blue_norm_weight).sum(axis=2)
+
+        self.lost_error = (red_predictions - image[4:-4, 4:-4, 0]) ** 2 + \
+            (green_predictions - image[4:-4, 4:-4, 1]) ** 2 + \
+            (blue_predictions - image[4:-4, 4:-4, 2]) ** 2
+
+    def lost_q(self, template, image):
+        self.template_match(image, template)
+        self.template_lost(image)
+        return (self.match_error - self.lost_error).sum()
+
+    def debug(self):
+        match_error_resize = cv2.resize(self.match_error, (256, 256),
+                                                interpolation=cv2.INTER_NEAREST)
+        lost_error_resize = cv2.resize(self.lost_error, (256, 256),
+                                        interpolation=cv2.INTER_NEAREST)
+        debug_image = np.zeros([256, 513, 3])
+        debug_image[:, :256, 0] = match_error_resize
+        debug_image[:, 257:, 0] = lost_error_resize
+        return debug_image
+
+
 class AntNav1(Node):
     def __init__(self):
         super().__init__("ant_nav_1")
@@ -121,7 +199,7 @@ class AntNav1(Node):
         sliding = np.lib.stride_tricks.sliding_window_view(self.route_images[:,:,15:15+16], window_shape = (5, 5), axis = (1, 2)).transpose(0, 1, 2, 4, 5, 3)
         self.reshape = sliding.reshape([center_images.shape[0] * 28 * 12, 3 * 5 * 5])
         # feature map is of shape [#images, 60, 28, 75]
-        self.feature_map = np.random.permutation(self.reshape)
+        feature_map = np.random.permutation(self.reshape)
         if self.diagnostic:
             plt.ion()
             self.fig, self.axs = plt.subplots(1, 5)
@@ -137,69 +215,12 @@ class AntNav1(Node):
             self.debug_image_publisher = None
         self.bridge = CvBridge()
         self.lostObj = Lost()
+        self.flexTemplate = LostTemplateMatch(feature_map)
         print("Initialized.")
 
     def normalize(self, image):
         """Binarizes onto (-1,1) using median."""
         return image/image.mean()
-
-    def template_match(self, template, image):
-        epsilon = .0000000000001
-        template_features = np.lib.stride_tricks.sliding_window_view(template, window_shape=(5, 5), axis=(0, 1))
-        template_features = template_features.transpose(0, 1, 3, 4, 2)
-        # template feature map is of shape [60, 28, 75] Features are flattened in last dimension as we will be building
-        # arrays of feature maps at each position and it may be confusing to have different spatial maps in same array.
-        template_features = template_features.reshape(list(template_features.shape[:2]) + [75])
-        # We now compute at each point a map of neighbour feature vectors, so we have shape [5, 5, 56, 24, 75]
-        template_feature_map = np.lib.stride_tricks.sliding_window_view(template_features, window_shape=(5, 5), axis=(0, 1)).transpose(
-            (3, 4, 0, 1, 2))
-
-        image_features = np.lib.stride_tricks.sliding_window_view(image, window_shape=(5, 5), axis=(0, 1))
-        image_features = image_features.transpose(0, 1, 3, 4, 2)
-        # image_features is of shape [56, 24, 75]
-        image_features = image_features.reshape(list(image_features.shape[:2]) + [75])[2:-2, 2:-2]
-
-        red_raw_weight = np.exp(-((image_features[:, :, :36] - template_feature_map[:, :, :, :, :36]) ** 2).sum(axis=-1))
-        red_norm_weight = red_raw_weight / (red_raw_weight.sum(axis=(0, 1)) + epsilon)
-        red_predictions = (template_feature_map[:, :, :, :, 36] * red_norm_weight).sum(axis=(0, 1))
-
-        green_raw_weight = np.exp(-((image_features[:, :, :37] - template_feature_map[:, :, :, :, :37]) ** 2).sum(axis=-1))
-        green_norm_weight = green_raw_weight / (green_raw_weight.sum(axis=(0, 1)) + epsilon)
-        green_predictions = (template_feature_map[:, :, :, :, 37] * green_norm_weight).sum(axis=(0, 1))
-
-        blue_raw_weight = np.exp(-((image_features[:, :, :38] - template_feature_map[:, :, :, :, :38]) ** 2).sum(axis=-1))
-        blue_norm_weight = blue_raw_weight / (blue_raw_weight.sum(axis=(0, 1)) + epsilon)
-        blue_predictions = (template_feature_map[:, :, :, :, 38] * blue_norm_weight).sum(axis=(0, 1))
-
-        return ((red_predictions - image[4:-4, 4:-4, 0]) ** 2).sum() + (
-                    (green_predictions - image[4:-4, 4:-4, 1]) ** 2).sum() + (
-                    (blue_predictions - image[4:-4, 4:-4, 2]) ** 2).sum()
-
-    def template_lost(self, image):
-        epsilon = .0000000000001
-        image_features = np.lib.stride_tricks.sliding_window_view(image, window_shape=(5, 5), axis=(0, 1))
-        image_features = image_features.transpose(0, 1, 3, 4, 2)
-        # image_features is of shape [56, 24, 75]
-        image_features = image_features.reshape(list(image_features.shape[:2]) + [75])[2:-2, 2:-2]
-
-        limit_ims = 25
-
-        red_raw_weight = np.exp(-((image_features[:, :, np.newaxis, :36] - self.feature_map[:limit_ims,:36]) ** 2).sum(axis=-1))
-        red_norm_weight = red_raw_weight / (red_raw_weight.sum(axis=2) + epsilon)[:,
-                                           :, np.newaxis]
-        red_predictions = (self.feature_map[:limit_ims, 36] * red_norm_weight).sum(axis = 2)
-
-        green_raw_weight = np.exp(-((image_features[:, :, np.newaxis, :37] - self.feature_map[:limit_ims,:37]) ** 2).sum(axis=-1))
-        green_norm_weight = green_raw_weight / (green_raw_weight.sum(axis=2) + epsilon)[:, :, np.newaxis]
-        green_predictions = (self.feature_map[:limit_ims, 37] * green_norm_weight).sum(axis=2)
-
-        blue_raw_weight = np.exp(-((image_features[:, :, np.newaxis, :38] - self.feature_map[:limit_ims,:38]) ** 2).sum(axis=-1))
-        blue_norm_weight = blue_raw_weight / (blue_raw_weight.sum(axis=2) + epsilon)[:, :, np.newaxis]
-        blue_predictions = (self.feature_map[:limit_ims, 38] * blue_norm_weight).sum(axis=2)
-
-        return ((red_predictions - image[4:-4, 4:-4, 0]) ** 2).sum() + (
-            (green_predictions - image[4:-4, 4:-4, 1]) ** 2).sum() + (
-            (blue_predictions - image[4:-4, 4:-4, 2]) ** 2).sum()
 
     def load_images(self):
         """Reads in images resizes to 64x64."""
@@ -233,7 +254,8 @@ class AntNav1(Node):
         top[:256,:256 ] = resized_image
         top[:256,257:] = resized_template
         lost_debug_image = self.lostObj.debug()
-        canvas = cv2.vconcat([top, lost_debug_image])
+        lost_flex = self.flexTemplate.debug()
+        canvas = cv2.vconcat([top, lost_debug_image, lost_flex])
         cv2.line(canvas, (256, 0), (256, 512), color=(0, 1, 0))
         return canvas
 
@@ -243,9 +265,7 @@ class AntNav1(Node):
         image_idx, angle = np.unravel_index(np.argmin(image_diffs, axis=None), image_diffs.shape)
         angle = np.argmin(image_diffs[(image_idx + 1) % self.last_image_idx])
         sub_window_idx = np.argmin(image_diffs[image_idx])
-        flex_template_min = self.template_match(self.route_images[image_idx, :, sub_window_idx:sub_window_idx+16], image)
-        lost_template_min = self.template_lost(image)
-        return image_idx, sub_window_idx, angle-8, template_min, flex_template_min, lost_template_min
+        return image_idx, sub_window_idx, angle-8, template_min
 
     def warnings(self, image_msg_timestamp, time_received):
         source_message_time = Time.from_msg(image_msg_timestamp).nanoseconds
@@ -265,10 +285,11 @@ class AntNav1(Node):
         smoothed_image = gaussian_filter(image, sigma=(self.blur, self.blur, 0))
         centre_image = smoothed_image[:, 8:24]
         norm_image = self.normalize(centre_image).astype(np.float32)
-        image_idx, sub_window_idx, angle, template_min, flex_template_min, lost_template_min = self.get_drive_instructions(norm_image)
+        image_idx, sub_window_idx, angle, template_min = self.get_drive_instructions(norm_image)
 
         lost_edge_min = self.lostObj.lost_q(self.ssd.norm_sld_route_images[image_idx, sub_window_idx], norm_image)
-        print(f'matched image idx {image_idx}, angle={angle}, template_min={template_min:.2f}, diff = {(lost_template_min-flex_template_min):.2f}, edge_min={lost_edge_min:.2f}, flex={flex_template_min:.2f}, lost={lost_template_min:.2f}')
+        flex_min = self.flexTemplate.lost_q(self.ssd.norm_sld_route_images[image_idx, sub_window_idx], norm_image)
+        print(f'matched image idx {image_idx}, angle={angle}, template_min={template_min:.2f}, diff = {flex_min:.2f}, edge_min={lost_edge_min:.2f}')
         if lost_edge_min > self.lost_edge_threshold:
             self.lost += 1
         else:
