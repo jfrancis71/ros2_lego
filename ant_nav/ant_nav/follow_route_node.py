@@ -13,6 +13,17 @@ from scipy.ndimage import gaussian_filter
 import matplotlib.pyplot as plt
 import cv2
 import scipy.stats
+from scipy.stats import chi2
+
+
+def von_mises(theta0, m, theta):
+    c = 1 / (2 * np.pi * np.i0(m))
+    return c * np.exp(m * np.cos(theta - theta0))
+
+
+def log_von_mises(theta0, m, theta):
+    c = 1 / (2 * np.pi * np.i0(m))
+    return np.log(c) + m * np.cos(theta - theta0)
 
 
 class SSD:
@@ -172,6 +183,107 @@ class LostTemplateMatch:
         return debug_image
 
 
+class LostEdge:
+    def __init__(self):
+        self.angle_diff_template = None
+        self.angle_diff_image = None
+        self.edges_image = None
+        self.edges_template = None
+        self.edge_threshold = 30.0
+
+    def lost_q(self, template, image):
+        grey_template = np.linalg.norm(template, axis=2)
+        grey_image = np.linalg.norm(image, axis=2)
+        sobel_x_template = cv2.Sobel(grey_template, cv2.CV_64F, 1, 0, ksize=5)
+        sobel_y_template = cv2.Sobel(grey_template, cv2.CV_64F, 0, 1, ksize=5)
+        sobel_x_image = cv2.Sobel(grey_image, cv2.CV_64F, 1, 0, ksize=5)
+        sobel_y_image = cv2.Sobel(grey_image, cv2.CV_64F, 0, 1, ksize=5)
+        mag_template = np.linalg.norm(np.array([sobel_x_template, sobel_y_template]), axis=0)
+        mag_image = np.linalg.norm(np.array([sobel_x_image, sobel_y_image]), axis=0)
+        dir_template = np.arctan2(sobel_x_template, sobel_y_template)
+        dir_image = np.arctan2(sobel_x_image, sobel_y_image)
+
+        m = (1 - np.exp(-mag_template/40))*4
+        self.preds = log_von_mises(dir_image, m, dir_template) - np.log(1.0/(2*np.pi))
+
+        return self.preds.sum()
+
+    def debug(self):
+        resized_angle_error = cv2.resize(self.preds, (256, 256), interpolation=cv2.INTER_NEAREST)
+        debug_image = np.zeros([256, 513, 3])
+        debug_image[:, :256, 2] = np.clip(resized_angle_error/2.0, 0.0, 1.0)
+        debug_image[:, :256, 0] = np.clip(-resized_angle_error / 2.0, 0.0, 1.0)
+        return debug_image
+
+
+class LostColorEdge:
+    def __init__(self):
+        self.angle_diff_template = None
+        self.angle_diff_image = None
+        self.edges_image = None
+        self.edges_template = None
+        self.edge_threshold = 30.0
+
+    def lost_q(self, template, image):
+        grey_template = np.linalg.norm(template, axis=2)
+        grey_image = np.linalg.norm(image, axis=2)
+        sobel_x_template_r = cv2.Sobel(template[:,:,0], cv2.CV_64F, 1, 0, ksize=5)
+        sobel_y_template_r = cv2.Sobel(template[:,:,0], cv2.CV_64F, 0, 1, ksize=5)
+        sobel_x_template_g = cv2.Sobel(template[:,:,1], cv2.CV_64F, 1, 0, ksize=5)
+        sobel_y_template_g = cv2.Sobel(template[:,:,1], cv2.CV_64F, 0, 1, ksize=5)
+        sobel_x_template_b = cv2.Sobel(template[:,:,2], cv2.CV_64F, 1, 0, ksize=5)
+        sobel_y_template_b = cv2.Sobel(template[:,:,2], cv2.CV_64F, 0, 1, ksize=5)
+
+        sobel_x_image_r = cv2.Sobel(image[:,:,0], cv2.CV_64F, 1, 0, ksize=5)
+        sobel_y_image_r = cv2.Sobel(image[:,:,0], cv2.CV_64F, 0, 1, ksize=5)
+        sobel_x_image_g = cv2.Sobel(image[:,:,1], cv2.CV_64F, 1, 0, ksize=5)
+        sobel_y_image_g = cv2.Sobel(image[:,:,1], cv2.CV_64F, 0, 1, ksize=5)
+        sobel_x_image_b = cv2.Sobel(image[:,:,2], cv2.CV_64F, 1, 0, ksize=5)
+        sobel_y_image_b = cv2.Sobel(image[:,:,2], cv2.CV_64F, 0, 1, ksize=5)
+
+        mag_template_r = np.linalg.norm(np.array([sobel_x_template_r, sobel_y_template_r]), axis=0)
+        mag_template_g = np.linalg.norm(np.array([sobel_x_template_g, sobel_y_template_g]), axis=0)
+        mag_template_b = np.linalg.norm(np.array([sobel_x_template_b, sobel_y_template_b]), axis=0)
+        mag_image_r = np.linalg.norm(np.array([sobel_x_image_r, sobel_y_image_r]), axis=0)
+        mag_image_g = np.linalg.norm(np.array([sobel_x_image_g, sobel_y_image_g]), axis=0)
+        mag_image_b = np.linalg.norm(np.array([sobel_x_image_b, sobel_y_image_b]), axis=0)
+
+        #mag_image = np.linalg.norm(np.array([sobel_x_image, sobel_y_image]), axis=0)
+        dir_template_r = np.arctan2(sobel_x_template_r, sobel_y_template_r)
+        dir_template_g = np.arctan2(sobel_x_template_g, sobel_y_template_g)
+        dir_template_b = np.arctan2(sobel_x_template_b, sobel_y_template_b)
+        dir_image_r = np.arctan2(sobel_x_image_r, sobel_y_image_r)
+        dir_image_g = np.arctan2(sobel_x_image_g, sobel_y_image_g)
+        dir_image_b = np.arctan2(sobel_x_image_b, sobel_y_image_b)
+
+        m_r = (1 - np.exp(-mag_template_r/40))*4
+        m_g = (1 - np.exp(-mag_template_g / 40)) * 4
+        m_b = (1 - np.exp(-mag_template_b / 40)) * 4
+        self.preds_r = log_von_mises(dir_image_r, m_r, dir_template_r) - np.log(1.0/(2*np.pi))
+        self.preds_g = log_von_mises(dir_image_g, m_g, dir_template_g) - np.log(1.0 / (2 * np.pi))
+        self.preds_b = log_von_mises(dir_image_b, m_b, dir_template_b) - np.log(1.0 / (2 * np.pi))
+
+        self.mag_r = np.log(chi2(mag_template_r+1).pdf(mag_image_r+1))/20
+        self.mag_g = np.log(chi2(mag_template_g + 1).pdf(mag_image_g + 1)) / 20
+        self.mag_b = np.log(chi2(mag_template_b + 1).pdf(mag_image_b + 1)) / 20
+
+        return self.preds_r.sum() + self.preds_g.sum() + self.preds_b.sum() + self.mag_r.sum() + self.mag_g.sum() + self.mag_b.sum()
+
+    def debug(self):
+        preds = self.preds_r + self.preds_g + self.preds_b
+        resized_angle_error = cv2.resize(preds, (256, 256), interpolation=cv2.INTER_NEAREST)
+        resized_mag_r_error = cv2.resize(self.mag_r, (256, 256), interpolation=cv2.INTER_NEAREST)
+        resized_mag_g_error = cv2.resize(self.mag_g, (256, 256), interpolation=cv2.INTER_NEAREST)
+        resized_mag_b_error = cv2.resize(self.mag_b, (256, 256), interpolation=cv2.INTER_NEAREST)
+        resized_mag_error = resized_mag_r_error + resized_mag_g_error + resized_mag_b_error
+        debug_image = np.zeros([256, 513, 3])
+        debug_image[:, :256, 2] = np.clip(resized_angle_error/2.0, 0.0, 1.0)
+        debug_image[:, :256, 0] = np.clip(-resized_angle_error / 2.0, 0.0, 1.0)
+        debug_image[:, 257:, 0] = np.clip(-resized_mag_error, 0.0, 1.0)
+        debug_image[:, 257:, 2] = np.clip(resized_mag_error, 0.0, 1.0)
+        return debug_image
+
+
 class AntNav1(Node):
     def __init__(self):
         super().__init__("ant_nav_1")
@@ -184,6 +296,7 @@ class AntNav1(Node):
         self.declare_parameter('diagnostic', False)
         self.declare_parameter("publish_debug", True)
         self.declare_parameter('angle_ratio', 36.)
+        self.declare_parameter('stop_on_last', 5)
         self.route_folder = self.get_parameter('route_folder').get_parameter_value().string_value
         self.route_loop = self.get_parameter('route_loop').get_parameter_value().bool_value
         self.lost_edge_threshold = self.get_parameter('lost_edge_threshold').get_parameter_value().double_value
@@ -193,6 +306,7 @@ class AntNav1(Node):
         self.diagnostic = self.get_parameter('diagnostic').get_parameter_value().bool_value
         publish_debug = self.get_parameter('publish_debug').get_parameter_value().bool_value
         self.angle_ratio = self.get_parameter('angle_ratio').get_parameter_value().double_value
+        self.stop_on_last = self.get_parameter('stop_on_last').get_parameter_value().integer_value
         self.blur = 1
         self.route_images = self.load_images()
         self.last_image_idx = self.route_images.shape[0]-1
@@ -213,7 +327,7 @@ class AntNav1(Node):
         else:
             self.debug_image_publisher = None
         self.bridge = CvBridge()
-        self.lostObj = Lost()
+        self.lostObj = LostColorEdge()
         self.flexTemplate = LostTemplateMatch(self.ssd.norm_sld_route_images.reshape([self.route_images.shape[0]*17, 32, 16, 3]))
         print("Initialized.")
 
@@ -239,11 +353,6 @@ class AntNav1(Node):
         twist_stamped.twist.linear.x = speed
         twist_stamped.twist.angular.z = angular_velocity
         self.publisher.publish(twist_stamped)
-
-    def von_mises(self, theta0, m, theta):
-        c = 1/(2 * np.pi * np.i0(m))
-        return c * np.exp(m * np.cos(theta - theta0))
-
 
     def debug_image(self, image, template):
         top = np.zeros([256, 513, 3])
@@ -293,11 +402,11 @@ class AntNav1(Node):
         lost_edge_min = self.lostObj.lost_q(self.ssd.norm_sld_route_images[image_idx, sub_window_idx], norm_image)
         flex_min = self.flexTemplate.lost_q(self.ssd.norm_sld_route_images[image_idx, sub_window_idx], norm_image)
         print(f'matched image idx {image_idx}, angle={angle}, template_min={template_min:.2f}, diff = {flex_min:.2f}, edge_min={lost_edge_min:.2f}')
-        if lost_edge_min > self.lost_edge_threshold:
+        if lost_edge_min < self.lost_edge_threshold:
             self.lost += 1
         else:
             self.lost = 0
-        if self.drive and self.lost < self.lost_seq_len and (image_idx != self.last_image_idx or self.route_loop):
+        if self.drive and self.lost < self.lost_seq_len and (image_idx < self.last_image_idx-self.stop_on_last or self.route_loop):
             speed = 0.05
             angular_velocity = angle/self.angle_ratio
             self.publish_twist(image_msg.header, speed, angular_velocity)
