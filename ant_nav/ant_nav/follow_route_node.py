@@ -328,7 +328,7 @@ class AntNav1(Node):
             self.debug_image_publisher = None
         self.bridge = CvBridge()
         self.lostObj = LostColorEdge()
-        self.flexTemplate = LostTemplateMatch(self.ssd.norm_sld_route_images.reshape([self.route_images.shape[0]*17, 32, 16, 3]))
+#        self.flexTemplate = LostTemplateMatch(self.ssd.norm_sld_route_images.reshape([self.route_images.shape[0]*17, 32, 16, 3]))
         print("Initialized.")
 
     def normalize(self, image):
@@ -362,8 +362,7 @@ class AntNav1(Node):
         top[:256,:256 ] = resized_image
         top[:256,257:] = resized_template
         lost_debug_image = self.lostObj.debug()
-        lost_flex = self.flexTemplate.debug()
-        canvas = cv2.vconcat([top, lost_debug_image, lost_flex])
+        canvas = cv2.vconcat([top, lost_debug_image])
         cv2.line(canvas, (256, 0), (256, 512), color=(0, 1, 0))
         cv2.line(canvas, (4*16, 0), (4*16, 256), color=(1,0,0))
         cv2.line(canvas, (256 + 4 * 16, 0), (256 + 4 * 16, 256), color=(1, 0, 0))
@@ -400,8 +399,8 @@ class AntNav1(Node):
         image_idx, sub_window_idx, angle, template_min = self.get_drive_instructions(norm_image)
 
         lost_edge_min = self.lostObj.lost_q(self.ssd.norm_sld_route_images[image_idx, sub_window_idx], norm_image)
-        flex_min = self.flexTemplate.lost_q(self.ssd.norm_sld_route_images[image_idx, sub_window_idx], norm_image)
-        print(f'matched image idx {image_idx}, angle={angle}, template_min={template_min:.2f}, diff = {flex_min:.2f}, edge_min={lost_edge_min:.2f}')
+#        flex_min = self.flexTemplate.lost_q(self.ssd.norm_sld_route_images[image_idx, sub_window_idx], norm_image)
+        print(f'matched image idx {image_idx}, angle={angle}, template_min={template_min:.2f}, edge_min={lost_edge_min:.2f}')
         if lost_edge_min < self.lost_edge_threshold:
             self.lost += 1
         else:
