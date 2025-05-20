@@ -1,24 +1,16 @@
-import rclpy
-import scipy.signal
-from PIL import Image as PILImage
+import glob
 import numpy as np
+from scipy.ndimage import gaussian_filter
+import scipy.stats
+from scipy.stats import chi2
+from PIL import Image as PILImage
+import cv2
+import rclpy
 from rclpy.node import Node
 from sensor_msgs.msg import Image
 from geometry_msgs.msg import TwistStamped
 from rclpy.time import Time
 from cv_bridge import CvBridge
-import glob
-import time
-from scipy.ndimage import gaussian_filter
-import matplotlib.pyplot as plt
-import cv2
-import scipy.stats
-from scipy.stats import chi2
-
-
-def von_mises(theta0, m, theta):
-    c = 1 / (2 * np.pi * np.i0(m))
-    return c * np.exp(m * np.cos(theta - theta0))
 
 
 def log_von_mises(theta0, m, theta):
@@ -35,187 +27,6 @@ class SSD:
         return ((image - self.norm_sld_route_images)**2).mean(axis=(2,3,4))
 
 
-class FFTSSD:
-    def __init__(self, templates):
-        self.templates_dft = np.fft.fft(templates.transpose(0, 1, 3, 2))
-        self.t = np.zeros([32, 3, 32])
-        sld_route_images = np.lib.stride_tricks.sliding_window_view(templates, window_shape=(32, 16, 3), axis=(1, 2, 3))[:, 0, :, 0]
-        norm_sld_route_images = sld_route_images/sld_route_images.mean(axis=(2,3,4))[:,:,np.newaxis, np.newaxis, np.newaxis]
-        self.norm_templates = (norm_sld_route_images ** 2).mean(axis=(2, 3, 4))
-        self.means = np.array([templates[:, :, x:x + 16].mean(axis=(1, 2, 3)) for x in range(17)]).transpose()
-
-    def ssd(self, image):
-        self.t[:, :, :16] = np.flip(image.transpose((0, 2, 1)), axis=-1)
-        image_dft = np.fft.fft(self.t)
-        cor_freq = image_dft * self.templates_dft
-        ifft = np.fft.ifft(cor_freq)
-        cor = ifft.sum(axis=(1, 2))
-        return (image ** 2).mean() + self.norm_templates - 2 * np.real(cor[:, 15:]) / (self.means * 32 * 16 * 3)
-
-
-class Lost:
-    def __init__(self):
-        self.angle_diff_template = None
-        self.angle_diff_image = None
-        self.edges_image = None
-        self.edges_template = None
-        self.edge_threshold = 30.0
-
-    def lost_q(self, template, image):
-        grey_template = np.linalg.norm(template, axis=2)
-        grey_image = np.linalg.norm(image, axis=2)
-        sobel_x_template = cv2.Sobel(grey_template, cv2.CV_64F, 1, 0, ksize=5)
-        sobel_y_template = cv2.Sobel(grey_template, cv2.CV_64F, 0, 1, ksize=5)
-        sobel_x_image = cv2.Sobel(grey_image, cv2.CV_64F, 1, 0, ksize=5)
-        sobel_y_image = cv2.Sobel(grey_image, cv2.CV_64F, 0, 1, ksize=5)
-        mag_template = np.linalg.norm(np.array([sobel_x_template, sobel_y_template]), axis=0)
-        mag_image = np.linalg.norm(np.array([sobel_x_image, sobel_y_image]), axis=0)
-        dir_template = np.arctan2(sobel_x_template, sobel_y_template)
-        dir_image = np.arctan2(sobel_x_image, sobel_y_image)
-        self.edges_template = mag_template > self.edge_threshold
-        self.edges_image = mag_image > self.edge_threshold
-        self.angle_diff_template = self.edges_template * (1 - np.cos(dir_template - dir_image))
-        self.angle_diff_image = self.edges_image * (1 - np.cos(dir_template - dir_image))
-        if self.edges_template.sum() > 0.0:
-            angle_diff_template_sum = self.angle_diff_template.sum()/self.edges_template.sum()
-        else:
-            angle_diff_template_sum = np.array(0.0)
-        if self.edges_image.sum() > 0.0:
-            angle_diff_image_sum = self.angle_diff_image.sum()/self.edges_image.sum()
-        else:
-            angle_diff_image_sum = np.array(0.0)
-        return angle_diff_template_sum + angle_diff_image_sum
-
-    def debug(self):
-        resized_lost_image_angle = cv2.resize(self.angle_diff_image, (256, 256), interpolation=cv2.INTER_NEAREST)
-        resized_lost_template_angle = cv2.resize(self.angle_diff_template, (256, 256), interpolation=cv2.INTER_NEAREST)
-        resized_lost_image_edge = cv2.resize(self.edges_image*1.0, (256, 256),
-                                              interpolation=cv2.INTER_NEAREST)
-        resized_lost_template_edge = cv2.resize(self.edges_template*1.0, (256, 256),
-                                                 interpolation=cv2.INTER_NEAREST)
-        debug_image = np.zeros([256, 513, 3])
-        debug_image[:, :256, 0] = resized_lost_image_edge
-        debug_image[:, :256, 1] = debug_image[:, :256, 2] = (1.0 - resized_lost_image_angle)*resized_lost_image_edge
-        debug_image[:, 257:, 0] = resized_lost_template_edge
-        debug_image[:, 257:, 1] = debug_image[:, 257:, 2] = (1.0 - resized_lost_template_angle)*resized_lost_template_edge
-        return debug_image
-
-
-class LostTemplateMatch:
-    def __init__(self, route_images):
-        sliding = np.lib.stride_tricks.sliding_window_view(route_images, window_shape = (5, 5), axis = (1, 2)).transpose(0, 1, 2, 4, 5, 3)
-        self.reshape = sliding.reshape([route_images.shape[0] * 28 * 12, 3 * 5 * 5])
-        # feature map is of shape [#images, 60, 28, 75]
-        self.feature_map = np.random.permutation(self.reshape)
-
-
-    def template_match(self, template, image):
-        epsilon = .0000000000001
-        template_features = np.lib.stride_tricks.sliding_window_view(template, window_shape=(5, 5), axis=(0, 1))
-        template_features = template_features.transpose(0, 1, 3, 4, 2)
-        # template feature map is of shape [60, 28, 75] Features are flattened in last dimension as we will be building
-        # arrays of feature maps at each position and it may be confusing to have different spatial maps in same array.
-        template_features = template_features.reshape(list(template_features.shape[:2]) + [75])
-        # We now compute at each point a map of neighbour feature vectors, so we have shape [5, 5, 56, 24, 75]
-        template_feature_map = np.lib.stride_tricks.sliding_window_view(template_features, window_shape=(5, 5), axis=(0, 1)).transpose(
-            (3, 4, 0, 1, 2))
-
-        image_features = np.lib.stride_tricks.sliding_window_view(image, window_shape=(5, 5), axis=(0, 1))
-        image_features = image_features.transpose(0, 1, 3, 4, 2)
-        # image_features is of shape [56, 24, 75]
-        image_features = image_features.reshape(list(image_features.shape[:2]) + [75])[2:-2, 2:-2]
-
-        red_raw_weight = np.exp(-((image_features[:, :, :36] - template_feature_map[:, :, :, :, :36]) ** 2).sum(axis=-1))
-        red_norm_weight = red_raw_weight / (red_raw_weight.sum(axis=(0, 1)) + epsilon)
-        red_predictions = (template_feature_map[:, :, :, :, 36] * red_norm_weight).sum(axis=(0, 1))
-
-        green_raw_weight = np.exp(-((image_features[:, :, :37] - template_feature_map[:, :, :, :, :37]) ** 2).sum(axis=-1))
-        green_norm_weight = green_raw_weight / (green_raw_weight.sum(axis=(0, 1)) + epsilon)
-        green_predictions = (template_feature_map[:, :, :, :, 37] * green_norm_weight).sum(axis=(0, 1))
-
-        blue_raw_weight = np.exp(-((image_features[:, :, :38] - template_feature_map[:, :, :, :, :38]) ** 2).sum(axis=-1))
-        blue_norm_weight = blue_raw_weight / (blue_raw_weight.sum(axis=(0, 1)) + epsilon)
-        blue_predictions = (template_feature_map[:, :, :, :, 38] * blue_norm_weight).sum(axis=(0, 1))
-
-        self.match_error = (red_predictions - image[4:-4, 4:-4, 0]) ** 2 + \
-                (green_predictions - image[4:-4, 4:-4, 1]) ** 2 + \
-                (blue_predictions - image[4:-4, 4:-4, 2]) ** 2
-
-    def template_lost(self, image):
-        epsilon = .0000000000001
-        image_features = np.lib.stride_tricks.sliding_window_view(image, window_shape=(5, 5), axis=(0, 1))
-        image_features = image_features.transpose(0, 1, 3, 4, 2)
-        # image_features is of shape [56, 24, 75]
-        image_features = image_features.reshape(list(image_features.shape[:2]) + [75])[2:-2, 2:-2]
-
-        limit_ims = 2500
-
-        red_raw_weight = np.exp(-((image_features[:, :, np.newaxis, :36] - self.feature_map[:limit_ims,:36]) ** 2).sum(axis=-1))
-        red_norm_weight = red_raw_weight / (red_raw_weight.sum(axis=2) + epsilon)[:,
-                                           :, np.newaxis]
-        red_predictions = (self.feature_map[:limit_ims, 36] * red_norm_weight).sum(axis = 2)
-
-        green_raw_weight = np.exp(-((image_features[:, :, np.newaxis, :37] - self.feature_map[:limit_ims,:37]) ** 2).sum(axis=-1))
-        green_norm_weight = green_raw_weight / (green_raw_weight.sum(axis=2) + epsilon)[:, :, np.newaxis]
-        green_predictions = (self.feature_map[:limit_ims, 37] * green_norm_weight).sum(axis=2)
-
-        blue_raw_weight = np.exp(-((image_features[:, :, np.newaxis, :38] - self.feature_map[:limit_ims,:38]) ** 2).sum(axis=-1))
-        blue_norm_weight = blue_raw_weight / (blue_raw_weight.sum(axis=2) + epsilon)[:, :, np.newaxis]
-        blue_predictions = (self.feature_map[:limit_ims, 38] * blue_norm_weight).sum(axis=2)
-
-        self.lost_error = (red_predictions - image[4:-4, 4:-4, 0]) ** 2 + \
-            (green_predictions - image[4:-4, 4:-4, 1]) ** 2 + \
-            (blue_predictions - image[4:-4, 4:-4, 2]) ** 2
-
-    def lost_q(self, template, image):
-        self.template_match(image, template)
-        self.template_lost(image)
-        return (self.match_error - self.lost_error).sum()
-
-    def debug(self):
-        match_error_resize = cv2.resize(self.match_error, (256, 256),
-                                                interpolation=cv2.INTER_NEAREST)
-        lost_error_resize = cv2.resize(self.lost_error, (256, 256),
-                                        interpolation=cv2.INTER_NEAREST)
-        debug_image = np.zeros([256, 513, 3])
-        debug_image[:, :256, 0] = match_error_resize
-        debug_image[:, 257:, 0] = lost_error_resize
-        return debug_image
-
-
-class LostEdge:
-    def __init__(self):
-        self.angle_diff_template = None
-        self.angle_diff_image = None
-        self.edges_image = None
-        self.edges_template = None
-        self.edge_threshold = 30.0
-
-    def lost_q(self, template, image):
-        grey_template = np.linalg.norm(template, axis=2)
-        grey_image = np.linalg.norm(image, axis=2)
-        sobel_x_template = cv2.Sobel(grey_template, cv2.CV_64F, 1, 0, ksize=5)
-        sobel_y_template = cv2.Sobel(grey_template, cv2.CV_64F, 0, 1, ksize=5)
-        sobel_x_image = cv2.Sobel(grey_image, cv2.CV_64F, 1, 0, ksize=5)
-        sobel_y_image = cv2.Sobel(grey_image, cv2.CV_64F, 0, 1, ksize=5)
-        mag_template = np.linalg.norm(np.array([sobel_x_template, sobel_y_template]), axis=0)
-        mag_image = np.linalg.norm(np.array([sobel_x_image, sobel_y_image]), axis=0)
-        dir_template = np.arctan2(sobel_x_template, sobel_y_template)
-        dir_image = np.arctan2(sobel_x_image, sobel_y_image)
-
-        m = (1 - np.exp(-mag_template/40))*4
-        self.preds = log_von_mises(dir_image, m, dir_template) - np.log(1.0/(2*np.pi))
-
-        return self.preds.sum()
-
-    def debug(self):
-        resized_angle_error = cv2.resize(self.preds, (256, 256), interpolation=cv2.INTER_NEAREST)
-        debug_image = np.zeros([256, 513, 3])
-        debug_image[:, :256, 2] = np.clip(resized_angle_error/2.0, 0.0, 1.0)
-        debug_image[:, :256, 0] = np.clip(-resized_angle_error / 2.0, 0.0, 1.0)
-        return debug_image
-
-
 class LostColorEdge:
     def __init__(self):
         self.angle_diff_template = None
@@ -225,8 +36,6 @@ class LostColorEdge:
         self.edge_threshold = 30.0
 
     def lost_q(self, template, image):
-        grey_template = np.linalg.norm(template, axis=2)
-        grey_image = np.linalg.norm(image, axis=2)
         sobel_x_template_r = cv2.Sobel(template[:,:,0], cv2.CV_64F, 1, 0, ksize=5)
         sobel_y_template_r = cv2.Sobel(template[:,:,0], cv2.CV_64F, 0, 1, ksize=5)
         sobel_x_template_g = cv2.Sobel(template[:,:,1], cv2.CV_64F, 1, 0, ksize=5)
@@ -248,7 +57,6 @@ class LostColorEdge:
         mag_image_g = np.linalg.norm(np.array([sobel_x_image_g, sobel_y_image_g]), axis=0)
         mag_image_b = np.linalg.norm(np.array([sobel_x_image_b, sobel_y_image_b]), axis=0)
 
-        #mag_image = np.linalg.norm(np.array([sobel_x_image, sobel_y_image]), axis=0)
         dir_template_r = np.arctan2(sobel_x_template_r, sobel_y_template_r)
         dir_template_g = np.arctan2(sobel_x_template_g, sobel_y_template_g)
         dir_template_b = np.arctan2(sobel_x_template_b, sobel_y_template_b)
@@ -284,12 +92,12 @@ class LostColorEdge:
         return debug_image
 
 
-class AntNav1(Node):
+class CatNav(Node):
     def __init__(self):
         super().__init__("ant_nav_1")
         self.declare_parameter('route_folder', './default_route_folder')
         self.declare_parameter('route_loop', False)
-        self.declare_parameter('lost_edge_threshold', .15)
+        self.declare_parameter('lost_edge_threshold', 150.0)
         self.declare_parameter('drive', True)
         self.declare_parameter('lost_seq_len', 5)
         self.declare_parameter('warning_time', .25)
@@ -313,9 +121,6 @@ class AntNav1(Node):
         self.image_idx = 0
         self.lost = self.lost_seq_len
         self.ssd = SSD(self.route_images)
-        if self.diagnostic:
-            plt.ion()
-            self.fig, self.axs = plt.subplots(1, 5)
         self.image_subscription = self.create_subscription(
             Image,
             "/image",
@@ -328,7 +133,6 @@ class AntNav1(Node):
             self.debug_image_publisher = None
         self.bridge = CvBridge()
         self.lostObj = LostColorEdge()
-#        self.flexTemplate = LostTemplateMatch(self.ssd.norm_sld_route_images.reshape([self.route_images.shape[0]*17, 32, 16, 3]))
         print("Initialized.")
 
     def normalize(self, image):
@@ -342,10 +146,6 @@ class AntNav1(Node):
         resized = np.array([np.array(PILImage.open(fname).resize((32,32))).astype(np.float32)/256. for fname in files])
         filtered = gaussian_filter(resized, sigma=(0, self.blur, self.blur, 0))
         return filtered
-
-    def route_image_diff(self, image):
-
-        return diffs
 
     def publish_twist(self, header, speed, angular_velocity):
         twist_stamped = TwistStamped()
@@ -367,7 +167,6 @@ class AntNav1(Node):
         cv2.line(canvas, (4*16, 0), (4*16, 256), color=(1,0,0))
         cv2.line(canvas, (256 + 4 * 16, 0), (256 + 4 * 16, 256), color=(1, 0, 0))
         cv2.line(canvas, (0, 4*8), (512, 4*8), color=(1, 0, 0))
-
         return canvas
 
     def get_drive_instructions(self, image):
@@ -399,7 +198,6 @@ class AntNav1(Node):
         image_idx, sub_window_idx, angle, template_min = self.get_drive_instructions(norm_image)
 
         lost_edge_min = self.lostObj.lost_q(self.ssd.norm_sld_route_images[image_idx, sub_window_idx], norm_image)
-#        flex_min = self.flexTemplate.lost_q(self.ssd.norm_sld_route_images[image_idx, sub_window_idx], norm_image)
         print(f'matched image idx {image_idx}, angle={angle}, template_min={template_min:.2f}, edge_min={lost_edge_min:.2f}')
         if lost_edge_min < self.lost_edge_threshold:
             self.lost += 1
@@ -418,7 +216,7 @@ class AntNav1(Node):
 
 
 rclpy.init()
-ant_nav = AntNav1()
+ant_nav = CatNav()
 rclpy.spin(ant_nav)
 ant_nav.destroy_node()
 rclpy.shutdown()
