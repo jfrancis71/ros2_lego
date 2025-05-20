@@ -2,7 +2,7 @@ import glob
 import numpy as np
 from scipy.ndimage import gaussian_filter
 import scipy.stats
-from scipy.stats import chi2
+from scipy.stats import chi2, vonmises
 from PIL import Image as PILImage
 import cv2
 import rclpy
@@ -11,11 +11,6 @@ from sensor_msgs.msg import Image
 from geometry_msgs.msg import TwistStamped
 from rclpy.time import Time
 from cv_bridge import CvBridge
-
-
-def log_von_mises(theta0, m, theta):
-    c = 1 / (2 * np.pi * np.i0(m))
-    return np.log(c) + m * np.cos(theta - theta0)
 
 
 class SSD:
@@ -29,11 +24,8 @@ class SSD:
 
 class LostColorEdge:
     def __init__(self):
-        self.angle_diff_template = None
-        self.angle_diff_image = None
-        self.edges_image = None
-        self.edges_template = None
-        self.edge_threshold = 30.0
+        self.preds_r = self.preds_g = self.preds_b = None
+        self.mag_r = self.mag_g = self.mag_b = None
 
     def lost_q(self, template, image):
         sobel_x_template_r = cv2.Sobel(template[:,:,0], cv2.CV_64F, 1, 0, ksize=5)
@@ -65,15 +57,16 @@ class LostColorEdge:
         dir_image_b = np.arctan2(sobel_x_image_b, sobel_y_image_b)
 
         m_r = (1 - np.exp(-mag_template_r/40))*4
-        m_g = (1 - np.exp(-mag_template_g / 40)) * 4
-        m_b = (1 - np.exp(-mag_template_b / 40)) * 4
-        self.preds_r = log_von_mises(dir_image_r, m_r, dir_template_r) - np.log(1.0/(2*np.pi))
-        self.preds_g = log_von_mises(dir_image_g, m_g, dir_template_g) - np.log(1.0 / (2 * np.pi))
-        self.preds_b = log_von_mises(dir_image_b, m_b, dir_template_b) - np.log(1.0 / (2 * np.pi))
+        m_g = (1 - np.exp(-mag_template_g/40))*4
+        m_b = (1 - np.exp(-mag_template_b/40))*4
 
-        self.mag_r = np.log(chi2(mag_template_r+1).pdf(mag_image_r+1))/20
-        self.mag_g = np.log(chi2(mag_template_g + 1).pdf(mag_image_g + 1)) / 20
-        self.mag_b = np.log(chi2(mag_template_b + 1).pdf(mag_image_b + 1)) / 20
+        self.preds_r = vonmises(m_r, dir_template_r).logpdf(dir_image_r) - np.log(1.0/(2*np.pi))
+        self.preds_g = vonmises(m_g, dir_template_g).logpdf(dir_image_g) - np.log(1.0 / (2 * np.pi))
+        self.preds_b = vonmises(m_b, dir_template_b).logpdf(dir_image_b) - np.log(1.0 / (2 * np.pi))
+
+        self.mag_r = chi2(mag_template_r+1).logpdf(mag_image_r+1)/20
+        self.mag_g = chi2(mag_template_g+1).logpdf(mag_image_g+1)/20
+        self.mag_b = chi2(mag_template_b+1).logpdf(mag_image_b+1)/20
 
         return self.preds_r.sum() + self.preds_g.sum() + self.preds_b.sum() + self.mag_r.sum() + self.mag_g.sum() + self.mag_b.sum()
 
@@ -102,7 +95,7 @@ class CatNav(Node):
         self.declare_parameter('lost_seq_len', 5)
         self.declare_parameter('warning_time', .25)
         self.declare_parameter('diagnostic', False)
-        self.declare_parameter("publish_debug", True)
+        self.declare_parameter("publish_diagnostic", True)
         self.declare_parameter('angle_ratio', 36.)
         self.declare_parameter('stop_on_last', 5)
         self.route_folder = self.get_parameter('route_folder').get_parameter_value().string_value
@@ -111,8 +104,7 @@ class CatNav(Node):
         self.drive = self.get_parameter('drive').get_parameter_value().bool_value
         self.lost_seq_len  = self.get_parameter('lost_seq_len').get_parameter_value().integer_value
         self.warning_time = self.get_parameter('warning_time').get_parameter_value().double_value
-        self.diagnostic = self.get_parameter('diagnostic').get_parameter_value().bool_value
-        publish_debug = self.get_parameter('publish_debug').get_parameter_value().bool_value
+        publish_diagnostic = self.get_parameter('publish_diagnostic').get_parameter_value().bool_value
         self.angle_ratio = self.get_parameter('angle_ratio').get_parameter_value().double_value
         self.stop_on_last = self.get_parameter('stop_on_last').get_parameter_value().integer_value
         self.blur = 1
@@ -126,11 +118,11 @@ class CatNav(Node):
             "/image",
             self.image_callback,
             1)
-        self.publisher = self.create_publisher(TwistStamped, "/cmd_vel", 10)
-        if publish_debug:
-            self.debug_image_publisher = self.create_publisher(Image, "/debug_image", 10)
+        self.twist_publisher = self.create_publisher(TwistStamped, "/cmd_vel", 10)
+        if publish_diagnostic:
+            self.diagnostic_image_publisher = self.create_publisher(Image, "/diagnostic_image", 10)
         else:
-            self.debug_image_publisher = None
+            self.diagnostic_image_publisher = None
         self.bridge = CvBridge()
         self.lostObj = LostColorEdge()
         print("Initialized.")
@@ -207,11 +199,11 @@ class CatNav(Node):
             speed = 0.05
             angular_velocity = angle/self.angle_ratio
             self.publish_twist(image_msg.header, speed, angular_velocity)
-        if self.debug_image_publisher:
+        if self.diagnostic_image_publisher:
             debug_image = self.debug_image(centre_image, self.route_images[image_idx, :, sub_window_idx:sub_window_idx + 16])
             debug_image_msg = self.bridge.cv2_to_imgmsg((debug_image*255).astype(np.uint8),
                                                        encoding="rgb8")
-            self.debug_image_publisher.publish(debug_image_msg)
+            self.diagnostic_image_publisher.publish(debug_image_msg)
         self.warnings(image_msg.header.stamp, time_received)
 
 
