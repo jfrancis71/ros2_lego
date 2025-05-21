@@ -94,7 +94,6 @@ class CatNav(Node):
         self.declare_parameter('drive', True)
         self.declare_parameter('lost_seq_len', 5)
         self.declare_parameter('warning_time', .25)
-        self.declare_parameter('diagnostic', False)
         self.declare_parameter("publish_diagnostic", True)
         self.declare_parameter('angle_ratio', 36.)
         self.declare_parameter('stop_on_last', 5)
@@ -104,7 +103,6 @@ class CatNav(Node):
         self.drive = self.get_parameter('drive').get_parameter_value().bool_value
         self.lost_seq_len  = self.get_parameter('lost_seq_len').get_parameter_value().integer_value
         self.warning_time = self.get_parameter('warning_time').get_parameter_value().double_value
-        publish_diagnostic = self.get_parameter('publish_diagnostic').get_parameter_value().bool_value
         self.angle_ratio = self.get_parameter('angle_ratio').get_parameter_value().double_value
         self.stop_on_last = self.get_parameter('stop_on_last').get_parameter_value().integer_value
         self.blur = 1
@@ -119,7 +117,7 @@ class CatNav(Node):
             self.image_callback,
             1)
         self.twist_publisher = self.create_publisher(TwistStamped, "/cmd_vel", 10)
-        if publish_diagnostic:
+        if self.get_parameter('publish_diagnostic').get_parameter_value().bool_value:
             self.diagnostic_image_publisher = self.create_publisher(Image, "/diagnostic_image", 10)
         else:
             self.diagnostic_image_publisher = None
@@ -144,7 +142,7 @@ class CatNav(Node):
         twist_stamped.header = header
         twist_stamped.twist.linear.x = speed
         twist_stamped.twist.angular.z = angular_velocity
-        self.publisher.publish(twist_stamped)
+        self.twist_publisher.publish(twist_stamped)
 
     def debug_image(self, image, template):
         top = np.zeros([256, 513, 3])
