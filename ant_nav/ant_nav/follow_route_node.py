@@ -28,41 +28,28 @@ class LostColorEdge:
         self.mag_r = self.mag_g = self.mag_b = None
 
     def lost_q(self, template, image):
-        sobel_x_template_r = cv2.Sobel(template[:,:,0], cv2.CV_64F, 1, 0, ksize=5)
-        sobel_y_template_r = cv2.Sobel(template[:,:,0], cv2.CV_64F, 0, 1, ksize=5)
-        sobel_x_template_g = cv2.Sobel(template[:,:,1], cv2.CV_64F, 1, 0, ksize=5)
-        sobel_y_template_g = cv2.Sobel(template[:,:,1], cv2.CV_64F, 0, 1, ksize=5)
-        sobel_x_template_b = cv2.Sobel(template[:,:,2], cv2.CV_64F, 1, 0, ksize=5)
-        sobel_y_template_b = cv2.Sobel(template[:,:,2], cv2.CV_64F, 0, 1, ksize=5)
+        sobel_x_template = cv2.Sobel(template, cv2.CV_64F, 1, 0, ksize=5)
+        sobel_y_template = cv2.Sobel(template, cv2.CV_64F, 0, 1, ksize=5)
+        sobel_x_image = cv2.Sobel(image, cv2.CV_64F, 1, 0, ksize=5)
+        sobel_y_image = cv2.Sobel(image, cv2.CV_64F, 0, 1, ksize=5)
 
-        sobel_x_image_r = cv2.Sobel(image[:,:,0], cv2.CV_64F, 1, 0, ksize=5)
-        sobel_y_image_r = cv2.Sobel(image[:,:,0], cv2.CV_64F, 0, 1, ksize=5)
-        sobel_x_image_g = cv2.Sobel(image[:,:,1], cv2.CV_64F, 1, 0, ksize=5)
-        sobel_y_image_g = cv2.Sobel(image[:,:,1], cv2.CV_64F, 0, 1, ksize=5)
-        sobel_x_image_b = cv2.Sobel(image[:,:,2], cv2.CV_64F, 1, 0, ksize=5)
-        sobel_y_image_b = cv2.Sobel(image[:,:,2], cv2.CV_64F, 0, 1, ksize=5)
+        mag_template_r = np.linalg.norm(np.array([sobel_x_template[:, :, 0], sobel_y_template[:, :, 0]]), axis=0)
+        mag_template_g = np.linalg.norm(np.array([sobel_x_template[:, :, 1], sobel_y_template[:, :, 1]]), axis=0)
+        mag_template_b = np.linalg.norm(np.array([sobel_x_template[:, :, 2], sobel_y_template[:, :, 2]]), axis=0)
+        mag_image_r = np.linalg.norm(np.array([sobel_x_image[:, :, 0], sobel_y_image[:, :, 0]]), axis=0)
+        mag_image_g = np.linalg.norm(np.array([sobel_x_image[:, :, 1], sobel_y_image[:, :, 1]]), axis=0)
+        mag_image_b = np.linalg.norm(np.array([sobel_x_image[:, :, 2], sobel_y_image[:, :, 2]]), axis=0)
 
-        mag_template_r = np.linalg.norm(np.array([sobel_x_template_r, sobel_y_template_r]), axis=0)
-        mag_template_g = np.linalg.norm(np.array([sobel_x_template_g, sobel_y_template_g]), axis=0)
-        mag_template_b = np.linalg.norm(np.array([sobel_x_template_b, sobel_y_template_b]), axis=0)
-        mag_image_r = np.linalg.norm(np.array([sobel_x_image_r, sobel_y_image_r]), axis=0)
-        mag_image_g = np.linalg.norm(np.array([sobel_x_image_g, sobel_y_image_g]), axis=0)
-        mag_image_b = np.linalg.norm(np.array([sobel_x_image_b, sobel_y_image_b]), axis=0)
-
-        dir_template_r = np.arctan2(sobel_x_template_r, sobel_y_template_r)
-        dir_template_g = np.arctan2(sobel_x_template_g, sobel_y_template_g)
-        dir_template_b = np.arctan2(sobel_x_template_b, sobel_y_template_b)
-        dir_image_r = np.arctan2(sobel_x_image_r, sobel_y_image_r)
-        dir_image_g = np.arctan2(sobel_x_image_g, sobel_y_image_g)
-        dir_image_b = np.arctan2(sobel_x_image_b, sobel_y_image_b)
+        dir_template = np.arctan2(sobel_x_template, sobel_y_template)
+        dir_image = np.arctan2(sobel_x_image, sobel_y_image)
 
         m_r = (1 - np.exp(-mag_template_r/40))*4
         m_g = (1 - np.exp(-mag_template_g/40))*4
         m_b = (1 - np.exp(-mag_template_b/40))*4
 
-        self.preds_r = vonmises(m_r, dir_template_r).logpdf(dir_image_r) - np.log(1.0/(2*np.pi))
-        self.preds_g = vonmises(m_g, dir_template_g).logpdf(dir_image_g) - np.log(1.0 / (2 * np.pi))
-        self.preds_b = vonmises(m_b, dir_template_b).logpdf(dir_image_b) - np.log(1.0 / (2 * np.pi))
+        self.preds_r = vonmises(m_r, dir_template[:,:,0]).logpdf(dir_image[:,:,0]) - np.log(1.0/(2*np.pi))
+        self.preds_g = vonmises(m_g, dir_template[:,:,1]).logpdf(dir_image[:,:,1]) - np.log(1.0 / (2 * np.pi))
+        self.preds_b = vonmises(m_b, dir_template[:,:,2]).logpdf(dir_image[:,:,2]) - np.log(1.0 / (2 * np.pi))
 
         self.mag_r = chi2(mag_template_r+1).logpdf(mag_image_r+1)/20
         self.mag_g = chi2(mag_template_g+1).logpdf(mag_image_g+1)/20
