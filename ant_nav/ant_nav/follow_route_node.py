@@ -43,11 +43,9 @@ class LostColorEdge:
 
     def debug(self):
         preds = self.preds.sum(axis=-1)
+        mag_error = self.mag.sum(axis=-1)
         resized_angle_error = cv2.resize(preds, (256, 256), interpolation=cv2.INTER_NEAREST)
-        resized_mag_r_error = cv2.resize(self.mag[:, :, 0], (256, 256), interpolation=cv2.INTER_NEAREST)
-        resized_mag_g_error = cv2.resize(self.mag[:, :, 1], (256, 256), interpolation=cv2.INTER_NEAREST)
-        resized_mag_b_error = cv2.resize(self.mag[:, :, 2], (256, 256), interpolation=cv2.INTER_NEAREST)
-        resized_mag_error = resized_mag_r_error + resized_mag_g_error + resized_mag_b_error
+        resized_mag_error = cv2.resize(mag_error, (256, 256), interpolation=cv2.INTER_NEAREST)
         debug_image = np.zeros([256, 513, 3])
         debug_image[:, :256, 2] = np.clip(resized_angle_error/2.0, 0.0, 1.0)
         debug_image[:, :256, 0] = np.clip(-resized_angle_error / 2.0, 0.0, 1.0)
