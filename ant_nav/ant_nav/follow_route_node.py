@@ -24,45 +24,29 @@ class SSD:
 
 class LostColorEdge:
     def __init__(self):
-        self.preds_r = self.preds_g = self.preds_b = None
-        self.mag_r = self.mag_g = self.mag_b = None
+        self.preds = None
+        self.mag = None
 
     def lost_q(self, template, image):
         sobel_x_template = cv2.Sobel(template, cv2.CV_64F, 1, 0, ksize=5)
         sobel_y_template = cv2.Sobel(template, cv2.CV_64F, 0, 1, ksize=5)
         sobel_x_image = cv2.Sobel(image, cv2.CV_64F, 1, 0, ksize=5)
         sobel_y_image = cv2.Sobel(image, cv2.CV_64F, 0, 1, ksize=5)
-
-        mag_template_r = np.linalg.norm(np.array([sobel_x_template[:, :, 0], sobel_y_template[:, :, 0]]), axis=0)
-        mag_template_g = np.linalg.norm(np.array([sobel_x_template[:, :, 1], sobel_y_template[:, :, 1]]), axis=0)
-        mag_template_b = np.linalg.norm(np.array([sobel_x_template[:, :, 2], sobel_y_template[:, :, 2]]), axis=0)
-        mag_image_r = np.linalg.norm(np.array([sobel_x_image[:, :, 0], sobel_y_image[:, :, 0]]), axis=0)
-        mag_image_g = np.linalg.norm(np.array([sobel_x_image[:, :, 1], sobel_y_image[:, :, 1]]), axis=0)
-        mag_image_b = np.linalg.norm(np.array([sobel_x_image[:, :, 2], sobel_y_image[:, :, 2]]), axis=0)
-
+        mag_template = np.linalg.norm(np.array([sobel_x_template, sobel_y_template]), axis=0)
+        mag_image = np.linalg.norm(np.array([sobel_x_image, sobel_y_image]), axis=0)
         dir_template = np.arctan2(sobel_x_template, sobel_y_template)
         dir_image = np.arctan2(sobel_x_image, sobel_y_image)
-
-        m_r = (1 - np.exp(-mag_template_r/40))*4
-        m_g = (1 - np.exp(-mag_template_g/40))*4
-        m_b = (1 - np.exp(-mag_template_b/40))*4
-
-        self.preds_r = vonmises(m_r, dir_template[:,:,0]).logpdf(dir_image[:,:,0]) - np.log(1.0/(2*np.pi))
-        self.preds_g = vonmises(m_g, dir_template[:,:,1]).logpdf(dir_image[:,:,1]) - np.log(1.0 / (2 * np.pi))
-        self.preds_b = vonmises(m_b, dir_template[:,:,2]).logpdf(dir_image[:,:,2]) - np.log(1.0 / (2 * np.pi))
-
-        self.mag_r = chi2(mag_template_r+1).logpdf(mag_image_r+1)/20
-        self.mag_g = chi2(mag_template_g+1).logpdf(mag_image_g+1)/20
-        self.mag_b = chi2(mag_template_b+1).logpdf(mag_image_b+1)/20
-
-        return self.preds_r.sum() + self.preds_g.sum() + self.preds_b.sum() + self.mag_r.sum() + self.mag_g.sum() + self.mag_b.sum()
+        m = (1 - np.exp(-mag_template/40))*4
+        self.preds = vonmises(m, dir_template).logpdf(dir_image) - np.log(1.0/(2*np.pi))
+        self.mag = chi2(mag_template+1).logpdf(mag_image+1)/20
+        return self.preds.sum() + self.mag.sum()
 
     def debug(self):
-        preds = self.preds_r + self.preds_g + self.preds_b
+        preds = self.preds.sum(axis=-1)
         resized_angle_error = cv2.resize(preds, (256, 256), interpolation=cv2.INTER_NEAREST)
-        resized_mag_r_error = cv2.resize(self.mag_r, (256, 256), interpolation=cv2.INTER_NEAREST)
-        resized_mag_g_error = cv2.resize(self.mag_g, (256, 256), interpolation=cv2.INTER_NEAREST)
-        resized_mag_b_error = cv2.resize(self.mag_b, (256, 256), interpolation=cv2.INTER_NEAREST)
+        resized_mag_r_error = cv2.resize(self.mag[:, :, 0], (256, 256), interpolation=cv2.INTER_NEAREST)
+        resized_mag_g_error = cv2.resize(self.mag[:, :, 1], (256, 256), interpolation=cv2.INTER_NEAREST)
+        resized_mag_b_error = cv2.resize(self.mag[:, :, 2], (256, 256), interpolation=cv2.INTER_NEAREST)
         resized_mag_error = resized_mag_r_error + resized_mag_g_error + resized_mag_b_error
         debug_image = np.zeros([256, 513, 3])
         debug_image[:, :256, 2] = np.clip(resized_angle_error/2.0, 0.0, 1.0)
@@ -185,10 +169,10 @@ class CatNav(Node):
             angular_velocity = angle/self.angle_ratio
             self.publish_twist(image_msg.header, speed, angular_velocity)
         if self.diagnostic_image_publisher:
-            debug_image = self.debug_image(centre_image, self.route_images[image_idx, :, sub_window_idx:sub_window_idx + 16])
-            debug_image_msg = self.bridge.cv2_to_imgmsg((debug_image*255).astype(np.uint8),
+            diagnostic_image = self.debug_image(centre_image, self.route_images[image_idx, :, sub_window_idx:sub_window_idx + 16])
+            diagnostic_image_msg = self.bridge.cv2_to_imgmsg((diagnostic_image*255).astype(np.uint8),
                                                        encoding="rgb8")
-            self.diagnostic_image_publisher.publish(debug_image_msg)
+            self.diagnostic_image_publisher.publish(diagnostic_image_msg)
         self.warnings(image_msg.header.stamp, time_received)
 
 
