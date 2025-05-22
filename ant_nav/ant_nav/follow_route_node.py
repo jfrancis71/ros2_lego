@@ -66,6 +66,7 @@ class CatNav(Node):
         self.declare_parameter("publish_diagnostic", True)
         self.declare_parameter('angle_ratio', 36.)
         self.declare_parameter('stop_on_last', 5)
+        self.declare_parameter('forward_speed', .05)
         self.route_folder = self.get_parameter('route_folder').get_parameter_value().string_value
         self.route_loop = self.get_parameter('route_loop').get_parameter_value().bool_value
         self.lost_edge_threshold = self.get_parameter('lost_edge_threshold').get_parameter_value().double_value
@@ -74,6 +75,7 @@ class CatNav(Node):
         self.warning_time = self.get_parameter('warning_time').get_parameter_value().double_value
         self.angle_ratio = self.get_parameter('angle_ratio').get_parameter_value().double_value
         self.stop_on_last = self.get_parameter('stop_on_last').get_parameter_value().integer_value
+        self.forward_speed = self.get_parameter('forward_speed').get_parameter_value().double_value
         self.blur = 1
         self.route_images = self.load_images()
         self.last_image_idx = self.route_images.shape[0]-1
@@ -163,7 +165,7 @@ class CatNav(Node):
         else:
             self.lost = 0
         if self.drive and self.lost < self.lost_seq_len and (image_idx < self.last_image_idx-self.stop_on_last or self.route_loop):
-            speed = 0.05
+            speed = self.forward_speed
             angular_velocity = angle/self.angle_ratio
             self.publish_twist(image_msg.header, speed, angular_velocity)
         if self.diagnostic_image_publisher:
