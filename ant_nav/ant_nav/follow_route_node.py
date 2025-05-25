@@ -13,15 +13,6 @@ from rclpy.time import Time
 from cv_bridge import CvBridge
 
 
-class SSD:
-    def __init__(self, route_images):
-        sld_route_images = np.lib.stride_tricks.sliding_window_view(route_images, window_shape=(32, 16, 3), axis=(1, 2, 3))[:, 0, :, 0]
-        self.norm_sld_route_images = sld_route_images/sld_route_images.mean(axis=(2,3,4))[:,:,np.newaxis, np.newaxis, np.newaxis]
-
-    def ssd(self, image):
-        return ((image - self.norm_sld_route_images)**2).mean(axis=(2,3,4))
-
-
 class LostDetector:
     def __init__(self):
         self.preds = None
@@ -78,10 +69,12 @@ class CatNav(Node):
         self.forward_speed = self.get_parameter('forward_speed').get_parameter_value().double_value
         self.blur = 1
         self.route_images = self.load_images()
+        filtered = gaussian_filter(self.route_images, sigma=(0, self.blur, self.blur, 0))
+        sld_route_images = np.lib.stride_tricks.sliding_window_view(filtered, window_shape=(32, 16, 3), axis=(1, 2, 3))[:, 0, :, 0]
+        self.norm_sld_route_images = sld_route_images/sld_route_images.mean(axis=(2,3,4))[:,:,np.newaxis, np.newaxis, np.newaxis]
         self.last_image_idx = self.route_images.shape[0]-1
         self.image_idx = 0
         self.lost = self.lost_seq_len
-        self.ssd = SSD(self.route_images)
         self.image_subscription = self.create_subscription(
             Image,
             "/image",
@@ -96,17 +89,11 @@ class CatNav(Node):
         self.lost_detector = LostDetector()
         print("Initialized.")
 
-    def normalize(self, image):
-        """Binarizes onto (-1,1) using median."""
-        return image/image.mean()
-
     def load_images(self):
-        """Reads in images resizes to 64x64."""
         files = glob.glob(f"{self.route_folder}/*.jpg")
         files.sort()
         resized = np.array([np.array(PILImage.open(fname).resize((32,32))).astype(np.float32)/256. for fname in files])
-        filtered = gaussian_filter(resized, sigma=(0, self.blur, self.blur, 0))
-        return filtered
+        return resized
 
     def publish_twist(self, header, speed, angular_velocity):
         twist_stamped = TwistStamped()
@@ -119,7 +106,6 @@ class CatNav(Node):
         top = np.zeros([256, 513, 3])
         resized_image = cv2.resize(image, (256, 256), interpolation=cv2.INTER_NEAREST)
         resized_template = cv2.resize(template, (256, 256), interpolation=cv2.INTER_NEAREST)
-
         top[:256,:256 ] = resized_image
         top[:256,257:] = resized_template
         lost_diagnostic_image = self.lost_detector.diagnostic()
@@ -131,7 +117,7 @@ class CatNav(Node):
         return canvas
 
     def get_drive_instructions(self, image):
-        image_diffs = self.ssd.ssd(image)
+        image_diffs = ((image - self.norm_sld_route_images)**2).mean(axis=(2,3,4))
         template_min = np.sqrt(image_diffs.min())
         image_idx, angle = np.unravel_index(np.argmin(image_diffs, axis=None), image_diffs.shape)
         angle = np.argmin(image_diffs[(image_idx + 1) % self.last_image_idx])
@@ -154,11 +140,10 @@ class CatNav(Node):
         pil_image = PILImage.fromarray(cv_image)
         image = np.array(pil_image.resize((32,32))).astype(np.float32)/256.
         smoothed_image = gaussian_filter(image, sigma=(self.blur, self.blur, 0))
-        centre_image = smoothed_image[:, 8:24]
-        norm_image = self.normalize(centre_image).astype(np.float32)
+        centre_image = smoothed_image[:, 8:24].astype(np.float32)
+        norm_image = centre_image/centre_image.mean()
         image_idx, sub_window_idx, angle, template_min = self.get_drive_instructions(norm_image)
-
-        lost_edge_min = self.lost_detector.lost(self.ssd.norm_sld_route_images[image_idx, sub_window_idx], norm_image)
+        lost_edge_min = self.lost_detector.lost(self.norm_sld_route_images[image_idx, sub_window_idx], norm_image)
         print(f'matched image idx {image_idx}, angle={angle}, template_min={template_min:.2f}, edge_min={lost_edge_min:.2f}')
         if lost_edge_min < self.lost_edge_threshold:
             self.lost += 1
@@ -169,7 +154,7 @@ class CatNav(Node):
             angular_velocity = angle/self.angle_ratio
             self.publish_twist(image_msg.header, speed, angular_velocity)
         if self.diagnostic_image_publisher:
-            diagnostic_image = self.diagnostic_image(centre_image, self.route_images[image_idx, :, sub_window_idx:sub_window_idx + 16])
+            diagnostic_image = self.diagnostic_image(image[:, 8:24], self.route_images[image_idx, :,  sub_window_idx:sub_window_idx+16])
             diagnostic_image_msg = self.bridge.cv2_to_imgmsg((diagnostic_image*255).astype(np.uint8),
                                                        encoding="rgb8")
             self.diagnostic_image_publisher.publish(diagnostic_image_msg)
