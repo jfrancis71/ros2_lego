@@ -29,7 +29,7 @@ class LostDetector:
         dir_image = np.arctan2(sobel_x_image, sobel_y_image)
         m = (1 - np.exp(-mag_template/40))*4
         self.preds = vonmises(m, dir_template).logpdf(dir_image) - np.log(1.0/(2*np.pi))
-        self.mag = chi2(mag_template+1).logpdf(mag_image+1)/20
+        self.mag = (chi2(mag_template+1).logpdf(mag_image+1) - chi2(10).logpdf(mag_image+1))/20
         return self.preds.sum() + self.mag.sum()
 
     def diagnostic(self):
@@ -50,7 +50,7 @@ class CatNav(Node):
         super().__init__("ant_nav_1")
         self.declare_parameter('route_folder', './default_route_folder')
         self.declare_parameter('route_loop', False)
-        self.declare_parameter('lost_edge_threshold', 150.0)
+        self.declare_parameter('lost_edge_threshold', 450.0)
         self.declare_parameter('drive', True)
         self.declare_parameter('lost_seq_len', 5)
         self.declare_parameter('warning_time', .25)
