@@ -37,7 +37,7 @@ class LostDetector:
         mag_error = self.mag.sum(axis=-1)
         resized_angle_error = cv2.resize(preds, (256, 256), interpolation=cv2.INTER_NEAREST)
         resized_mag_error = cv2.resize(mag_error, (256, 256), interpolation=cv2.INTER_NEAREST)
-        diagnostic_image = np.zeros([256, 513, 3])
+        diagnostic_image = np.zeros([256, 513, 3]).astype(np.float32)
         diagnostic_image[:, :256, 2] = np.clip(resized_angle_error/2.0, 0.0, 1.0)
         diagnostic_image[:, :256, 0] = np.clip(-resized_angle_error / 2.0, 0.0, 1.0)
         diagnostic_image[:, 257:, 0] = np.clip(-resized_mag_error, 0.0, 1.0)
@@ -47,7 +47,7 @@ class LostDetector:
 
 class CatNav(Node):
     def __init__(self):
-        super().__init__("ant_nav_1")
+        super().__init__("cat_nav")
         self.declare_parameter('route_folder', './default_route_folder')
         self.declare_parameter('route_loop', False)
         self.declare_parameter('lost_edge_threshold', 450.0)
@@ -83,6 +83,14 @@ class CatNav(Node):
         self.twist_publisher = self.create_publisher(TwistStamped, "/cmd_vel", 10)
         if self.get_parameter('publish_diagnostic').get_parameter_value().bool_value:
             self.diagnostic_image_publisher = self.create_publisher(Image, "/diagnostic_image", 10)
+            self.top_text = np.zeros([30, 513, 3]).astype(np.float32)
+            font = cv2.FONT_HERSHEY_SIMPLEX
+            cv2.putText(self.top_text, 'Current Camera Image', (60, 20), font, .5, (1, 1, 1), 1, cv2.LINE_AA)
+            cv2.putText(self.top_text, 'Best Template Match', (280, 20), font, .5, (1, 1, 1), 1, cv2.LINE_AA)
+            self.bottom_text = np.zeros([30, 513, 3]).astype(np.float32)
+            font = cv2.FONT_HERSHEY_SIMPLEX
+            cv2.putText(self.bottom_text, 'Edge Orientation Error', (60, 20), font, .5, (1, 1, 1), 1, cv2.LINE_AA)
+            cv2.putText(self.bottom_text, 'Edge Magnitude Error', (280, 20), font, .5, (1, 1, 1), 1, cv2.LINE_AA)
         else:
             self.diagnostic_image_publisher = None
         self.bridge = CvBridge()
@@ -103,17 +111,17 @@ class CatNav(Node):
         self.twist_publisher.publish(twist_stamped)
 
     def diagnostic_image(self, image, template):
-        top = np.zeros([256, 513, 3])
         resized_image = cv2.resize(image, (256, 256), interpolation=cv2.INTER_NEAREST)
         resized_template = cv2.resize(template, (256, 256), interpolation=cv2.INTER_NEAREST)
-        top[:256,:256 ] = resized_image
-        top[:256,257:] = resized_template
+        divider = np.zeros([256, 1, 3]).astype(np.float32)
+        divider[:, :, 1] = 1.0
+        cv2.line(resized_image, (8*16, 0), (8*16, 256), color=(1, 0, 0))
+        cv2.line(resized_template, (8 * 16, 0), (8 * 16, 256), color=(1, 0, 0))
+        top = cv2.hconcat([resized_image, divider, resized_template])
+        cv2.line(top, (0, 16*8), (512, 16*8), color=(1, 0, 0))
         lost_diagnostic_image = self.lost_detector.diagnostic()
-        canvas = cv2.vconcat([top, lost_diagnostic_image])
-        cv2.line(canvas, (256, 0), (256, 512), color=(0, 1, 0))
-        cv2.line(canvas, (4*16, 0), (4*16, 256), color=(1,0,0))
-        cv2.line(canvas, (256 + 4 * 16, 0), (256 + 4 * 16, 256), color=(1, 0, 0))
-        cv2.line(canvas, (0, 4*8), (512, 4*8), color=(1, 0, 0))
+        canvas = cv2.vconcat([self.top_text, top, self.bottom_text, lost_diagnostic_image])
+        cv2.line(canvas, (256, 30), (256, 512+30*2), color=(0, 1, 0))
         return canvas
 
     def get_drive_instructions(self, image):
@@ -162,7 +170,7 @@ class CatNav(Node):
 
 
 rclpy.init()
-ant_nav = CatNav()
-rclpy.spin(ant_nav)
-ant_nav.destroy_node()
+cat_nav = CatNav()
+rclpy.spin(cat_nav)
+cat_nav.destroy_node()
 rclpy.shutdown()
