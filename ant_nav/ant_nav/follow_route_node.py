@@ -15,8 +15,12 @@ from cv_bridge import CvBridge
 
 class LostDetector:
     def __init__(self):
-        self.preds = None
-        self.mag = None
+        self.edge_direction_error = None
+        self.edge_mag_error = None
+        self.heading_text = np.zeros([30, 513, 3]).astype(np.float32)
+        font = cv2.FONT_HERSHEY_SIMPLEX
+        cv2.putText(self.heading_text, 'Edge Orientation Error', (60, 20), font, .5, (1, 1, 1), 1, cv2.LINE_AA)
+        cv2.putText(self.heading_text, 'Edge Magnitude Error', (280, 20), font, .5, (1, 1, 1), 1, cv2.LINE_AA)
 
     def lost(self, template, image):
         sobel_x_template = cv2.Sobel(template, cv2.CV_64F, 1, 0, ksize=5)
@@ -28,21 +32,29 @@ class LostDetector:
         dir_template = np.arctan2(sobel_x_template, sobel_y_template)
         dir_image = np.arctan2(sobel_x_image, sobel_y_image)
         m = (1 - np.exp(-mag_template/40))*4
-        self.preds = vonmises(m, dir_template).logpdf(dir_image) - np.log(1.0/(2*np.pi))
-        self.mag = (chi2(mag_template+1).logpdf(mag_image+1) - chi2(10).logpdf(mag_image+1))/20
-        return self.preds.sum() + self.mag.sum()
+        self.edge_direction_error = vonmises(m, dir_template).logpdf(dir_image) - np.log(1.0/(2*np.pi))
+        self.edge_mag_error = (chi2(mag_template+1).logpdf(mag_image+1) - chi2(10).logpdf(mag_image+1))/20
+        return self.edge_direction_error.sum() + self.edge_mag_error.sum()
 
     def diagnostic(self):
-        preds = self.preds.sum(axis=-1)
-        mag_error = self.mag.sum(axis=-1)
-        resized_angle_error = cv2.resize(preds, (256, 256), interpolation=cv2.INTER_NEAREST)
-        resized_mag_error = cv2.resize(mag_error, (256, 256), interpolation=cv2.INTER_NEAREST)
-        diagnostic_image = np.zeros([256, 513, 3]).astype(np.float32)
-        diagnostic_image[:, :256, 2] = np.clip(resized_angle_error/2.0, 0.0, 1.0)
-        diagnostic_image[:, :256, 0] = np.clip(-resized_angle_error / 2.0, 0.0, 1.0)
-        diagnostic_image[:, 257:, 0] = np.clip(-resized_mag_error, 0.0, 1.0)
-        diagnostic_image[:, 257:, 2] = np.clip(resized_mag_error, 0.0, 1.0)
-        return diagnostic_image
+        edge_direction_error = self.edge_direction_error.sum(axis=-1)
+        edge_mag_error = self.edge_mag_error.sum(axis=-1)
+        resized_angle_error = cv2.resize(edge_direction_error, (256, 256), interpolation=cv2.INTER_NEAREST)
+        resized_mag_error = cv2.resize(edge_mag_error, (256, 256), interpolation=cv2.INTER_NEAREST)
+        diagnostic_angle_error = np.zeros([256, 256, 3]).astype(np.float32)
+        diagnostic_angle_error[:, :, 2] = np.clip(resized_angle_error/2.0, 0.0, 1.0)
+        diagnostic_angle_error[:, :, 0] = np.clip(-resized_angle_error / 2.0, 0.0, 1.0)
+        diagnostic_mag_error = np.zeros([256, 256, 3]).astype(np.float32)
+        diagnostic_mag_error[:, :, 0] = np.clip(-resized_mag_error, 0.0, 1.0)
+        diagnostic_mag_error[:, :, 2] = np.clip(resized_mag_error, 0.0, 1.0)
+        cv2.line(diagnostic_angle_error, (8*16, 0), (8*16, 256), color=(0, .7, .7))
+        cv2.line(diagnostic_mag_error, (8 * 16, 0), (8 * 16, 256), color=(0, .7, .7))
+        divider = np.zeros([256, 1, 3]).astype(np.float32)
+        divider[:, :, 1] = 1.0
+        diagnostic_image = cv2.hconcat([diagnostic_angle_error, divider, diagnostic_mag_error])
+        cv2.line(diagnostic_image, (0, 16 * 8), (512, 16 * 8), color=(0, .7, .7))
+        canvas = cv2.vconcat([self.heading_text, diagnostic_image])
+        return canvas
 
 
 class CatNav(Node):
@@ -83,14 +95,10 @@ class CatNav(Node):
         self.twist_publisher = self.create_publisher(TwistStamped, "/cmd_vel", 10)
         if self.get_parameter('publish_diagnostic').get_parameter_value().bool_value:
             self.diagnostic_image_publisher = self.create_publisher(Image, "/diagnostic_image", 10)
-            self.top_text = np.zeros([30, 513, 3]).astype(np.float32)
+            self.heading_text = np.zeros([30, 513, 3]).astype(np.float32)
             font = cv2.FONT_HERSHEY_SIMPLEX
-            cv2.putText(self.top_text, 'Current Camera Image', (60, 20), font, .5, (1, 1, 1), 1, cv2.LINE_AA)
-            cv2.putText(self.top_text, 'Best Template Match', (280, 20), font, .5, (1, 1, 1), 1, cv2.LINE_AA)
-            self.bottom_text = np.zeros([30, 513, 3]).astype(np.float32)
-            font = cv2.FONT_HERSHEY_SIMPLEX
-            cv2.putText(self.bottom_text, 'Edge Orientation Error', (60, 20), font, .5, (1, 1, 1), 1, cv2.LINE_AA)
-            cv2.putText(self.bottom_text, 'Edge Magnitude Error', (280, 20), font, .5, (1, 1, 1), 1, cv2.LINE_AA)
+            cv2.putText(self.heading_text, 'Current Camera Image', (60, 20), font, .5, (1, 1, 1), 1, cv2.LINE_AA)
+            cv2.putText(self.heading_text, 'Best Template Match', (280, 20), font, .5, (1, 1, 1), 1, cv2.LINE_AA)
         else:
             self.diagnostic_image_publisher = None
         self.bridge = CvBridge()
@@ -115,13 +123,12 @@ class CatNav(Node):
         resized_template = cv2.resize(template, (256, 256), interpolation=cv2.INTER_NEAREST)
         divider = np.zeros([256, 1, 3]).astype(np.float32)
         divider[:, :, 1] = 1.0
-        cv2.line(resized_image, (8*16, 0), (8*16, 256), color=(1, 0, 0))
-        cv2.line(resized_template, (8 * 16, 0), (8 * 16, 256), color=(1, 0, 0))
+        cv2.line(resized_image, (8*16, 0), (8*16, 256), color=(0, .7, .7))
+        cv2.line(resized_template, (8 * 16, 0), (8 * 16, 256), color=(0, .7, .7))
         top = cv2.hconcat([resized_image, divider, resized_template])
-        cv2.line(top, (0, 16*8), (512, 16*8), color=(1, 0, 0))
+        cv2.line(top, (0, 16*8), (512, 16*8), color=(0, .7, .7))
         lost_diagnostic_image = self.lost_detector.diagnostic()
-        canvas = cv2.vconcat([self.top_text, top, self.bottom_text, lost_diagnostic_image])
-        cv2.line(canvas, (256, 30), (256, 512+30*2), color=(0, 1, 0))
+        canvas = cv2.vconcat([self.heading_text, top, lost_diagnostic_image])
         return canvas
 
     def get_drive_instructions(self, image):
@@ -132,7 +139,7 @@ class CatNav(Node):
         sub_window_idx = np.argmin(image_diffs[image_idx])
         return image_idx, sub_window_idx, angle-8, template_min
 
-    def warnings(self, image_msg_timestamp, time_received):
+    def timing_warnings(self, image_msg_timestamp, time_received):
         source_message_time = Time.from_msg(image_msg_timestamp).nanoseconds
         network_transit_time = (time_received - source_message_time)*1e-9
         now = self.get_clock().now().nanoseconds
@@ -152,7 +159,7 @@ class CatNav(Node):
         norm_image = centre_image/centre_image.mean()
         image_idx, sub_window_idx, angle, template_min = self.get_drive_instructions(norm_image)
         lost_edge_min = self.lost_detector.lost(self.norm_sld_route_images[image_idx, sub_window_idx], norm_image)
-        print(f'matched image idx {image_idx}, angle={angle}, template_min={template_min:.2f}, edge_min={lost_edge_min:.2f}')
+        print(f'matched image idx {image_idx}, angle={angle}, template_min={template_min:.2f}, lost_edge={lost_edge_min:.2f}')
         if lost_edge_min < self.lost_edge_threshold:
             self.lost += 1
         else:
@@ -166,7 +173,7 @@ class CatNav(Node):
             diagnostic_image_msg = self.bridge.cv2_to_imgmsg((diagnostic_image*255).astype(np.uint8),
                                                        encoding="rgb8")
             self.diagnostic_image_publisher.publish(diagnostic_image_msg)
-        self.warnings(image_msg.header.stamp, time_received)
+        self.timing_warnings(image_msg.header.stamp, time_received)
 
 
 rclpy.init()
