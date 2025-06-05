@@ -1,7 +1,6 @@
 import glob
 import numpy as np
 from scipy.ndimage import gaussian_filter
-import scipy.stats
 from scipy.stats import chi2, vonmises
 from PIL import Image as PILImage
 import cv2
@@ -112,11 +111,11 @@ class CatNav(Node):
         resized = np.array([np.array(PILImage.open(fname).resize((32,32))).astype(np.float32)/256. for fname in files])
         return resized
 
-    def publish_twist(self, header, speed, angular_velocity):
+    def publish_twist(self, header, twist_linear_x, twist_angular_z):
         twist_stamped = TwistStamped()
         twist_stamped.header = header
-        twist_stamped.twist.linear.x = speed
-        twist_stamped.twist.angular.z = angular_velocity
+        twist_stamped.twist.linear.x = twist_linear_x
+        twist_stamped.twist.angular.z = twist_angular_z
         self.twist_publisher.publish(twist_stamped)
 
     def diagnostic_image(self, image, template, edge_direction_error, edge_mag_error):
@@ -135,10 +134,10 @@ class CatNav(Node):
     def get_drive_instructions(self, image):
         image_diffs = ((image - self.norm_sld_route_images)**2).mean(axis=(2,3,4))
         template_min = np.sqrt(image_diffs.min())
-        image_idx, angle = np.unravel_index(np.argmin(image_diffs, axis=None), image_diffs.shape)
-        angle = np.argmin(image_diffs[(image_idx + 1) % self.last_image_idx])
-        sub_window_idx = np.argmin(image_diffs[image_idx])
-        return image_idx, sub_window_idx, angle-8, template_min
+        image_idx, _ = np.unravel_index(np.argmin(image_diffs, axis=None), image_diffs.shape)
+        offset = np.argmin(image_diffs[image_idx])
+        next_offset = np.argmin(image_diffs[(image_idx + 1) % self.last_image_idx])
+        return image_idx, offset, next_offset, template_min
 
     def timing_warnings(self, image_msg_timestamp, time_received):
         source_message_time = Time.from_msg(image_msg_timestamp).nanoseconds
@@ -158,25 +157,25 @@ class CatNav(Node):
         smoothed_image = gaussian_filter(image, sigma=(self.blur, self.blur, 0))
         centre_image = smoothed_image[:, 8:24].astype(np.float32)
         norm_image = centre_image/centre_image.mean()
-        image_idx, sub_window_idx, angle, template_min = self.get_drive_instructions(norm_image)
+        image_idx, offset, next_offset, template_min = self.get_drive_instructions(norm_image)
         edge_direction_error, edge_mag_error = self.lost_detector.prediction_error(
-            self.norm_sld_route_images[image_idx, sub_window_idx], norm_image)
+            self.norm_sld_route_images[image_idx, offset], norm_image)
         if self.diagnostic_image_publisher:
             diagnostic_image = self.diagnostic_image(image[:, 8:24],
-                self.route_images[image_idx, :,  sub_window_idx:sub_window_idx+16], edge_direction_error, edge_mag_error)
+                self.route_images[image_idx, :,  offset:offset+16], edge_direction_error, edge_mag_error)
             diagnostic_image_msg = self.bridge.cv2_to_imgmsg((diagnostic_image*255).astype(np.uint8),
                                                        encoding="rgb8")
             self.diagnostic_image_publisher.publish(diagnostic_image_msg)
         lost_min = self.lost_detector.lost_error(edge_direction_error, edge_mag_error)
-        print(f'matched image idx {image_idx}, angle={angle}, template_min={template_min:.2f}, lost_edge={lost_min:.2f}')
+        print(f'matched image idx {image_idx}, centered offset={offset-8}, template_min={template_min:.2f}, lost_edge={lost_min:.2f}')
         if lost_min < self.lost_edge_threshold:
             self.lost += 1
         else:
             self.lost = 0
         if self.drive and self.lost < self.lost_seq_len and (image_idx < self.last_image_idx-self.stop_on_last or self.route_loop):
-            speed = self.forward_speed
-            angular_velocity = angle/self.angle_ratio
-            self.publish_twist(image_msg.header, speed, angular_velocity)
+            twist_linear_x = self.forward_speed
+            twist_angular_z = (next_offset-8)/self.angle_ratio
+            self.publish_twist(image_msg.header, twist_linear_x, twist_angular_z)
         self.timing_warnings(image_msg.header.stamp, time_received)
 
 
