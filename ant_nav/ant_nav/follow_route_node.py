@@ -148,7 +148,7 @@ class CatNav(Node):
         self.bridge = CvBridge()
         self.localizer = Localizer(self.route_images)
         self.lost_detector = LostDetector()
-        print("Initialized.")
+        self.get_logger().info("Node has started.")
 
     def publish_twist(self, header, twist_linear_x, twist_angular_z):
         twist_stamped = TwistStamped()
@@ -188,7 +188,8 @@ class CatNav(Node):
                                                        encoding="rgb8")
             self.diagnostic_image_publisher.publish(diagnostic_image_msg)
         lost_min = self.lost_detector.lost_error(edge_direction_error, edge_mag_error)
-        print(f'matched image idx {image_idx}, centered offset={offset-8}, template_min={template_min:.2f}, lost_edge={lost_min:.2f}')
+        info_msg = f'matched image idx {image_idx}, centered offset={offset-8}, template_min={template_min:.2f}, lost_edge={lost_min:.2f}'
+        self.get_logger().info(info_msg)
         if lost_min < self.lost_edge_threshold:
             self.lost += 1
         else:
