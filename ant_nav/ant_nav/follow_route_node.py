@@ -103,6 +103,8 @@ class Localizer:
 
 def load_images(route_folder):
     files = glob.glob(f"{route_folder}/*.jpg")
+    if files == []:
+        raise RuntimeError(f'Error, no files in folder {route_folder}.')
     files.sort()
     resized = np.array([np.array(PILImage.open(fname).resize((32,32))).astype(np.float32)/256. for fname in files])
     return resized
@@ -114,7 +116,7 @@ class CatNav(Node):
         self.declare_parameter('route_folder', './default_route_folder')
         self.declare_parameter('route_loop', False)
         self.declare_parameter('lost_edge_threshold', 450.0)
-        self.declare_parameter('drive', True)
+        self.declare_parameter('self_drive', True)
         self.declare_parameter('lost_seq_len', 5)
         self.declare_parameter('warning_time', .25)
         self.declare_parameter("publish_diagnostic", True)
@@ -124,25 +126,24 @@ class CatNav(Node):
         route_folder = self.get_parameter('route_folder').get_parameter_value().string_value
         self.route_loop = self.get_parameter('route_loop').get_parameter_value().bool_value
         self.lost_edge_threshold = self.get_parameter('lost_edge_threshold').get_parameter_value().double_value
-        self.drive = self.get_parameter('drive').get_parameter_value().bool_value
+        self.self_drive = self.get_parameter('self_drive').get_parameter_value().bool_value
         self.lost_seq_len  = self.get_parameter('lost_seq_len').get_parameter_value().integer_value
         self.warning_time = self.get_parameter('warning_time').get_parameter_value().double_value
         self.angle_ratio = self.get_parameter('angle_ratio').get_parameter_value().double_value
         self.stop_on_last = self.get_parameter('stop_on_last').get_parameter_value().integer_value
         self.forward_speed = self.get_parameter('forward_speed').get_parameter_value().double_value
-        self.blur = 1
         self.route_images = load_images(route_folder)
         self.last_image_idx = self.route_images.shape[0]-1
-        self.image_idx = 0
-        self.lost = self.lost_seq_len
+        # Let's start assuming lost; we'll reset this later in image_callback if good match found
+        self.lost_counter = self.lost_seq_len
         self.image_subscription = self.create_subscription(
             Image,
             "/image",
             self.image_callback,
             1)
-        self.twist_publisher = self.create_publisher(TwistStamped, "/cmd_vel", 10)
+        self.twist_publisher = self.create_publisher(TwistStamped, "/cmd_vel", 1)
         if self.get_parameter('publish_diagnostic').get_parameter_value().bool_value:
-            self.diagnostic_image_publisher = self.create_publisher(Image, "/diagnostic_image", 10)
+            self.diagnostic_image_publisher = self.create_publisher(Image, "/diagnostic_image", 1)
         else:
             self.diagnostic_image_publisher = None
         self.bridge = CvBridge()
@@ -191,10 +192,10 @@ class CatNav(Node):
         info_msg = f'matched image idx {image_idx}, centered offset={offset-8}, template_min={template_min:.2f}, lost_edge={lost_min:.2f}'
         self.get_logger().info(info_msg)
         if lost_min < self.lost_edge_threshold:
-            self.lost += 1
+            self.lost_counter += 1
         else:
-            self.lost = 0
-        if self.drive and self.lost < self.lost_seq_len and (image_idx < self.last_image_idx-self.stop_on_last or self.route_loop):
+            self.lost_counter = 0
+        if self.self_drive and self.lost_counter < self.lost_seq_len and (image_idx < self.last_image_idx-self.stop_on_last or self.route_loop):
             twist_linear_x = self.forward_speed
             twist_angular_z = (next_offset-8)/self.angle_ratio
             self.publish_twist(image_msg.header, twist_linear_x, twist_angular_z)
