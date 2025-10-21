@@ -1,143 +1,89 @@
 import rclpy
 from rclpy.node import Node
 from sensor_msgs.msg import LaserScan
-from nav_msgs.msg import OccupancyGrid
-from geometry_msgs.msg import Point, Pose, PoseStamped, Quaternion
-from scipy.spatial.transform import Rotation as R
-from std_msgs.msg import Header
-from laser_geometry.laser_geometry import LaserProjection
-from sensor_msgs.msg import PointCloud2
+from geometry_msgs.msg import TransformStamped
+from tf2_ros import TransformBroadcaster
+from tf_transformations import quaternion_from_euler
+import skimage
 import numpy as np
-import time
-import math
-
+import itertools
 
 class Nav(Node):
     def __init__(self):
         super().__init__("nav")
-        np.set_printoptions(edgeitems=20, linewidth=200)
-        self.base_ranges = None
-
         self.lidar_subscription = self.create_subscription(
             LaserScan,
             "/scan",
             self.lidar_callback,
             1)
-        self.pose_publisher = \
-            self.create_publisher(PoseStamped, "nav_pose", 10)
-        self.base_publisher = \
-            self.create_publisher(LaserScan, "/base_laser", 10)
-        self.current_publisher = \
-            self.create_publisher(LaserScan, "/current_laser", 10)
-        self.trans_publisher = \
-            self.create_publisher(LaserScan, "/trans_laser", 10)
+        self.pred_publisher = \
+            self.create_publisher(LaserScan, "/pred_laser", 10)
+        self.house = skimage.io.imread("~/ros2_ws/my_house.pgm")
+        self.centers = [(78, 200), (80, 202), (80, 200), (80, 198), (80, 196), (82, 200)]
+        self.centers = sum([[(w, c) for c in range(196,200)] for w in range(78,82)], [])
+        self.centers = [(70, 200)]
+        self.centers = [(30, 220)]
+        self.centers = [(30, 220), (40, 220)]
+#        self.centers = [(80,200), (90, 200), (100, 200)]
+        self.centers = [(80, 200), (80, 190), (80, 180)]
+        self.centers = [[(r,c) for c in range(150,220,10)] for r in range(40,100,10)]
+        self.centers = list(itertools.chain(*self.centers))
 
-        self.num_rand_poses = 1000
-        self.rand_poses = np.random.rand(self.num_rand_poses, 3)
-        self.rand_poses[:, :2] = self.rand_poses[:, :2] - 0.5
-        self.rand_poses[:, 2] = self.rand_poses[:, 2] * 2 * math.pi
-        self.laserProjection = LaserProjection()
+        self.trans = np.array([skimage.transform.warp_polar(self.house==0, center=c, radius=100) for c in self.centers])
+        self.polar_coords = np.array([np.argmax(self.trans[c], axis=1)*0.05 for c in range(len(self.centers))])
+        #self.trans = np.flip(np.array([skimage.transform.warp_polar(self.house==0, center=c, radius=100) for c in self.centers]), axis=1)
+        self.tf_broadcaster = TransformBroadcaster(self)
 
-    def convert_to_2d(self, lidar_msg):
-        points = np.zeros([len(lidar_msg.ranges), 2])
-        distances = np.array(lidar_msg.ranges)
-        for l in range(len(lidar_msg.ranges)):
-            angle = l*2*np.pi/500
-            if np.isnan(distances[l]):
-                continue
-            points[l, 0] = distances[l]*np.cos(angle-math.pi/2)
-            points[l, 1]  = distances[l]*np.sin(angle-math.pi/2)
-        return points
-
-    def publish_pose(self, header, x, y, theta):
-        pose_msg = Pose()
-        point = Point()
-        point.x = x
-        point.y = y
-        pose_msg.position = point
-        orientation = theta
-        quaternion = R.from_euler('xyz', [0, 0, orientation]).as_quat()
-        q = Quaternion()
-        q.x, q.y, q.z, q.w = quaternion
-        pose_msg.orientation = q
-        pose_stamped = PoseStamped()
-        pose_stamped.header = header
-        pose_stamped.header.frame_id = "base_link"
-        pose_stamped.pose = pose_msg
-        self.pose_publisher.publish(pose_stamped)
-
-    def publish_laser(self, publisher, header, ranges, intensity):
-        lidar_msg = LaserScan()
-        lidar_msg.ranges = ranges[:500]
-        lidar_msg.intensities = np.array(ranges[:500])*0.0 + intensity
-        lidar_msg.angle_min = 0.0
-        lidar_msg.angle_max = 6.28318548
-        lidar_msg.angle_increment = 0.012466637417674065
-        lidar_msg.time_increment = 0.00019850002718158066
-        lidar_msg.scan_time = 0.10004401206970215
-        lidar_msg.range_min = 0.019999999552965164
-        lidar_msg.range_max = 25.0
-        lidar_msg.header = header
-        lidar_msg.header.frame_id = "base_laser"
-        publisher.publish(lidar_msg)
-
-    def transform(self, points, delta_x, delta_y, delta_theta):
-        new_points1 = np.copy(points)
-        new_points1[:, 0] -= delta_x
-        new_points1[:, 1] -= delta_y
-        new_points_x = points[:, 0] * np.cos(delta_theta) - points[:, 1] * np.sin(delta_theta) - delta_x
-        new_points_y = points[:, 0] * np.sin(delta_theta) + points[:, 1] * np.cos(delta_theta) - delta_y
-        new_points = np.stack([new_points_x, new_points_y], axis=1)
-        return new_points
-
-    def predict_ranges(self, points):  # points is in coordinate system of laser range finder.
-        ranges = np.zeros([500])
-        angles = np.arctan2(points[:, 1], points[:, 0])
-        distances = np.linalg.norm(points, axis=1)
-        for i in range(500):
-            pred_angle = 2*math.pi * i/500
-            point = np.argmin(np.cos(angles-pred_angle-math.pi/2))
-            ranges[i] = distances[point]
-        return ranges
-
-    def predict_pose(self, lidar_ranges, lidar_msg):
-        dists = np.zeros([self.num_rand_poses])
-        for i in range(self.num_rand_poses):
-            pose = self.rand_poses[i]
-            trans_points = self.transform(self.map_points, pose[0], pose[1], pose[2])
-#            trans_points = self.transform(self.map_points, pose[0], pose[1], 0.0)
-            pred_ranges = self.predict_ranges(trans_points)
-            dist = (lidar_ranges[:500] - pred_ranges)**2
-            print("Dist=", i, np.nanmean(dist), self.rand_poses[i])
-            dists[i] = np.nanmean(dist)
-        best = np.argmin(dists)
-        print("smallest = ", best, " pose=", self.rand_poses[best], "result=", dists[best])
-        print("TEST")
-        trans_points = self.transform(self.map_points, 0.0, 0.0, 0.0)
-        pred_ranges = self.predict_ranges(trans_points)
-        dist = (lidar_ranges[:500] - pred_ranges)**2
-        print("Dist=", np.nanmean(dist), self.rand_poses[i])
-        print("END")
-        pose = self.rand_poses[best]
-        trans_points = self.transform(self.map_points, pose[0], pose[1], pose[2])
-#        trans_points = self.transform(self.map_points, 0.0, 0.0, pose[2])
-        pred_ranges = self.predict_ranges(trans_points)
-        self.publish_laser(self.trans_publisher, lidar_msg.header, pred_ranges, 200)
-        return self.rand_poses[best, 0], self.rand_poses[best, 1], -self.rand_poses[best, 2]
-       
     def lidar_callback(self, lidar_msg):
-        print("Received lidar message.", lidar_msg.header.frame_id)
-        print("Message length", len(lidar_msg.ranges))
-        if self.base_ranges is None:
-            self.base_ranges = lidar_msg.ranges
-            self.map_points = self.convert_to_2d(lidar_msg)
-            print(self.base_ranges)
-            return
-        new_points = self.convert_to_2d(lidar_msg)
-        pose = self.predict_pose(lidar_msg.ranges, lidar_msg)
-        self.publish_pose(lidar_msg.header, pose[0], pose[1], pose[2])
-        self.publish_laser(self.base_publisher, lidar_msg.header, self.base_ranges, 100)
-        self.publish_laser(self.current_publisher, lidar_msg.header, lidar_msg.ranges, 0)
+#        print("Received lidar message.", lidar_msg.header.frame_id)
+#        print("Message length", len(lidar_msg.ranges))
+        scan = np.array(lidar_msg.ranges)
+        new_scan = skimage.transform.resize(scan.astype(np.float32), (360,))
+#        predictions = np.roll(np.array([[np.flip(np.argmax(self.trans[c], axis=1)*0.05) for s in range(359)] for c in range(len(self.centers))]), 90, axis=2)
+        predictions = np.array([[np.roll(np.flip(self.polar_coords[c]), 90+s) for s in range(359)] for c in range(len(self.centers))])
+        print("pred shape=", predictions.shape)
+
+#        angles = np.nanmean((predictions - new_scan)**2, axis=0)[np.newaxis, np.newaxis]
+        prediction_error = np.nanmean((predictions - new_scan)**2, axis=2)
+        idx = np.unravel_index(np.argmin(prediction_error), prediction_error.shape)
+#        idx = [0,0]
+        print("idx=", idx)
+        loc = idx[0]
+        angle = 2 * np.pi * idx[1]/360.0
+        print("Best =", loc, " match=", prediction_error[idx])
+
+        t = TransformStamped()
+
+        t.header.stamp = self.get_clock().now().to_msg()
+        t.header.frame_id = 'map'
+        t.child_frame_id = 'base_link'
+
+        t.transform.translation.x = self.centers[loc][1]*.05 -13.640
+        t.transform.translation.y = (118-self.centers[loc][0])*0.05 -3.959
+        t.transform.translation.z = 0.0
+
+        q = quaternion_from_euler(0, 0, -angle)
+        t.transform.rotation.x = q[0]
+        t.transform.rotation.y = q[1]
+        t.transform.rotation.z = q[2]
+        t.transform.rotation.w = q[3]
+
+        self.tf_broadcaster.sendTransform(t)
+
+        lidar_msg1 = LaserScan()
+        lidar_msg1.ranges = predictions[idx[0], idx[1]]
+        lidar_msg1.angle_min = 0.0
+        lidar_msg1.angle_max = 6.28318548
+        lidar_msg1.angle_increment = 2 * np.pi / 360.
+        lidar_msg1.time_increment = 0.00019850002718158066
+        lidar_msg1.scan_time = 0.10004401206970215
+        lidar_msg1.range_min = 0.019999999552965164
+        lidar_msg1.range_max = 25.0
+        #lidar_msg.header
+        lidar_msg1.header = lidar_msg.header
+        self.pred_publisher.publish(lidar_msg1)
+
+
 
 
 rclpy.init()
