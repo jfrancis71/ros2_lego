@@ -1,8 +1,9 @@
-import rclpy
+import time
+import itertools
+import os
+import yaml
 import skimage
 import numpy as np
-import itertools
-import time
 import rclpy
 from rclpy.node import Node
 from sensor_msgs.msg import LaserScan
@@ -17,6 +18,13 @@ from tf2_ros import TransformException
 class Localizer(Node):
     def __init__(self):
         super().__init__("nav")
+        self.declare_parameter('map', 'my_house.yaml')
+        self.map_file = self.get_parameter('map').get_parameter_value().string_value
+        with open(self.map_file, 'r') as map_file:
+            map_properties = yaml.safe_load(map_file)
+            self.image_filename = map_properties['image']
+            self.origin = map_properties['origin']
+            self.resolution = map_properties["resolution"]
         self.lidar_subscription = self.create_subscription(
             LaserScan,
             "/scan",
@@ -26,13 +34,12 @@ class Localizer(Node):
             self.create_publisher(LaserScan, "/pred_laser", 10)
         self.tf_buffer = Buffer()
         self.tf_listener = TransformListener(self.tf_buffer, self)
-        self.house = skimage.io.imread("~/ros2_ws/my_house.pgm")
-        print("Dims=", self.house.shape)
-        self.centers = [[(r,c) for c in range(0, 317, 10)] for r in range(0, 118, 10)]
-        self.centers = list(itertools.chain(*self.centers))
-        self.trans = np.array([skimage.transform.warp_polar(self.house==0, center=c, radius=100) for c in self.centers])
-        self.polar_coords = np.array([np.argmax(self.trans[c], axis=1)*0.05 for c in range(len(self.centers))])
         self.tf_broadcaster = TransformBroadcaster(self)
+        self.map = skimage.io.imread(os.path.join(os.path.split(self.map_file)[0], self.image_filename))
+        self.centers = [[(r,c) for c in range(0, self.map.shape[1], 10)] for r in range(0, self.map.shape[0], 10)]
+        self.centers = list(itertools.chain(*self.centers))
+        self.trans = np.array([skimage.transform.warp_polar(self.map==0, center=c, radius=100) for c in self.centers])
+        self.polar_coords = np.array([np.argmax(self.trans[c], axis=1)*self.resolution for c in range(len(self.centers))])
 
     def send_map_base_link_transform(self, loc, angle, tim):
     # This needs checking carefully, works for a lidar mounted clockwise 90 degrees
@@ -50,8 +57,8 @@ class Localizer(Node):
         t.header.stamp = self.get_clock().now().to_msg()
         t.header.frame_id = 'map'
         t.child_frame_id = 'base_link'
-        t.transform.translation.x = self.centers[loc][1]*.05 -13.640
-        t.transform.translation.y = (118-self.centers[loc][0])*0.05 -3.959
+        t.transform.translation.x = self.centers[loc][1]*self.resolution + self.origin[0]
+        t.transform.translation.y = (self.map.shape[0]-self.centers[loc][0])*self.resolution + self.origin[1]
         t.transform.translation.z = 0.0
         q = quaternion_from_euler(0, 0, -angle + np.pi/2)
         t.transform.rotation.x = q[0]
@@ -81,7 +88,6 @@ class Localizer(Node):
         angles = np.nanmean((predictions - new_scan)**2, axis=0)[np.newaxis, np.newaxis]
         prediction_error = np.nanmean((predictions - new_scan)**2, axis=2)
         idx = np.unravel_index(np.argmin(prediction_error), prediction_error.shape)
-        print("idx=", idx)
         loc = idx[0]
         angle = 2 * np.pi * idx[1]/360.0
         self.send_map_base_link_transform(loc, angle, None)
