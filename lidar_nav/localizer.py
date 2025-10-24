@@ -44,28 +44,35 @@ class Localizer(Node):
     def send_map_base_link_transform(self, loc, angle, tim):
     # This needs checking carefully, works for a lidar mounted clockwise 90 degrees
     # from base link
-    # Also this does not work with odom frame. Ideally should work with map->odom->base_link->base_laser
         try:
             lookup = self.tf_buffer.lookup_transform(
                 "base_link",
-                "base_laser",
+                "odom",
                 rclpy.time.Time())
         except TransformException as ex:
             print("No Transform")
             return
         t = TransformStamped()
         t.header.stamp = self.get_clock().now().to_msg()
-        t.header.frame_id = 'map'
-        t.child_frame_id = 'base_link'
-        t.transform.translation.x = self.centers[loc][1]*self.resolution + self.origin[0]
-        t.transform.translation.y = (self.map.shape[0]-self.centers[loc][0])*self.resolution + self.origin[1]
-        t.transform.translation.z = 0.0
-        q = quaternion_from_euler(0, 0, -angle + np.pi/2)
-        t.transform.rotation.x = q[0]
-        t.transform.rotation.y = q[1]
-        t.transform.rotation.z = q[2]
-        t.transform.rotation.w = q[3]
+        t.header.frame_id = 'zero'
+        t.child_frame_id = 'odom'
+#        t.transform.rotation.w = -lookup.transform.rotation.w
+        t.transform = lookup.transform
         self.tf_broadcaster.sendTransform(t)
+        t1 = TransformStamped()
+        t1.header.stamp = self.get_clock().now().to_msg()
+        t1.header.frame_id = 'map'
+        t1.child_frame_id = 'zero'
+        t1.transform.translation.x = self.centers[loc][1]*self.resolution + self.origin[0]
+        t1.transform.translation.y = (self.map.shape[0]-self.centers[loc][0])*self.resolution + self.origin[1]
+        t1.transform.translation.z = 0.0
+        q = quaternion_from_euler(0, 0, -angle + np.pi/2)
+        t1.transform.rotation.x = q[0]
+        t1.transform.rotation.y = q[1]
+        t1.transform.rotation.z = q[2]
+        t1.transform.rotation.w = q[3]
+        self.tf_broadcaster.sendTransform(t1)
+
 
     def publish_lidar_prediction(self, header, ranges):
         lidar_msg1 = LaserScan()
