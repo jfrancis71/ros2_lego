@@ -1,4 +1,5 @@
 import time
+import copy
 import itertools
 import os
 import yaml
@@ -52,6 +53,14 @@ class Localizer(Node):
         except TransformException as ex:
             print("No Transform")
             return
+        try:
+            lookup1 = self.tf_buffer.lookup_transform(
+                "base_laser",
+                "base_link",
+                rclpy.time.Time())
+        except TransformException as ex:
+            print("No Transform")
+            return
         t = TransformStamped()
         t.header.stamp = self.get_clock().now().to_msg()
         t.header.frame_id = 'zero'
@@ -59,14 +68,24 @@ class Localizer(Node):
 #        t.transform.rotation.w = -lookup.transform.rotation.w
         t.transform = lookup.transform
         self.tf_broadcaster.sendTransform(t)
+
+        t2 = TransformStamped()
+        t2.header.stamp = self.get_clock().now().to_msg()
+        t2.header.frame_id = 'map_base_laser'
+        t2.child_frame_id = 'zero'
+        t2.transform = lookup1.transform
+        print("lookup=", lookup1.transform)
+        print("T2=", t2.transform)
+        self.tf_broadcaster.sendTransform(t2)
+
         t1 = TransformStamped()
         t1.header.stamp = self.get_clock().now().to_msg()
         t1.header.frame_id = 'map'
-        t1.child_frame_id = 'zero'
+        t1.child_frame_id = 'map_base_laser'
         t1.transform.translation.x = self.centers[loc][1]*self.resolution + self.origin[0]
         t1.transform.translation.y = (self.map.shape[0]-self.centers[loc][0])*self.resolution + self.origin[1]
         t1.transform.translation.z = 0.0
-        q = quaternion_from_euler(0, 0, -angle + np.pi/2)
+        q = quaternion_from_euler(0, 0, -angle)
         t1.transform.rotation.x = q[0]
         t1.transform.rotation.y = q[1]
         t1.transform.rotation.z = q[2]
