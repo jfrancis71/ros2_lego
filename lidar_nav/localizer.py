@@ -43,10 +43,8 @@ class Localizer(Node):
         self.polar_coords = np.array([np.argmax(self.trans[c], axis=1)*self.resolution for c in range(len(self.centers))])
 
     def send_map_base_link_transform(self, loc, angle, tim):
-    # This needs checking carefully, works for a lidar mounted clockwise 90 degrees
-    # from base link
         try:
-            lookup = self.tf_buffer.lookup_transform(
+            base_link_to_odom_transform = self.tf_buffer.lookup_transform(
                 "base_link",
                 "odom",
                 rclpy.time.Time())
@@ -54,43 +52,45 @@ class Localizer(Node):
             print("No Transform")
             return
         try:
-            lookup1 = self.tf_buffer.lookup_transform(
+            base_laser_to_base_link_transform = self.tf_buffer.lookup_transform(
                 "base_laser",
                 "base_link",
                 rclpy.time.Time())
         except TransformException as ex:
             print("No Transform")
             return
-        t = TransformStamped()
-        t.header.stamp = self.get_clock().now().to_msg()
-        t.header.frame_id = 'zero'
-        t.child_frame_id = 'odom'
-#        t.transform.rotation.w = -lookup.transform.rotation.w
-        t.transform = lookup.transform
-        self.tf_broadcaster.sendTransform(t)
+        zero_to_odom_transform = TransformStamped()
+        zero_to_odom_transform.header.stamp = self.get_clock().now().to_msg()
+        zero_to_odom_transform.header.frame_id = 'zero'
+        zero_to_odom_transform.child_frame_id = 'odom'
+        zero_to_odom_transform.transform = base_link_to_odom_transform.transform
+        self.tf_broadcaster.sendTransform(zero_to_odom_transform)
 
-        t2 = TransformStamped()
-        t2.header.stamp = self.get_clock().now().to_msg()
-        t2.header.frame_id = 'map_base_laser'
-        t2.child_frame_id = 'zero'
-        t2.transform = lookup1.transform
-        print("lookup=", lookup1.transform)
-        print("T2=", t2.transform)
-        self.tf_broadcaster.sendTransform(t2)
+        map_base_laser_to_zero_transform = TransformStamped()
+        map_base_laser_to_zero_transform.header.stamp = \
+            self.get_clock().now().to_msg()
+        map_base_laser_to_zero_transform.header.frame_id = 'map_base_laser'
+        map_base_laser_to_zero_transform.child_frame_id = 'zero'
+        map_base_laser_to_zero_transform.transform = \
+            base_laser_to_base_link_transform.transform
+        self.tf_broadcaster.sendTransform(map_base_laser_to_zero_transform)
 
-        t1 = TransformStamped()
-        t1.header.stamp = self.get_clock().now().to_msg()
-        t1.header.frame_id = 'map'
-        t1.child_frame_id = 'map_base_laser'
-        t1.transform.translation.x = self.centers[loc][1]*self.resolution + self.origin[0]
-        t1.transform.translation.y = (self.map.shape[0]-self.centers[loc][0])*self.resolution + self.origin[1]
-        t1.transform.translation.z = 0.0
+        map_to_map_base_laser_transform = TransformStamped()
+        map_to_map_base_laser_transform.header.stamp = \
+            self.get_clock().now().to_msg()
+        map_to_map_base_laser_transform.header.frame_id = 'map'
+        map_to_map_base_laser_transform.child_frame_id = 'map_base_laser'
+        map_to_map_base_laser_transform.transform.translation.x = \
+            self.centers[loc][1]*self.resolution + self.origin[0]
+        map_to_map_base_laser_transform.transform.translation.y = \
+            (self.map.shape[0]-self.centers[loc][0])*self.resolution + self.origin[1]
+        map_to_map_base_laser_transform.transform.translation.z = 0.0
         q = quaternion_from_euler(0, 0, -angle)
-        t1.transform.rotation.x = q[0]
-        t1.transform.rotation.y = q[1]
-        t1.transform.rotation.z = q[2]
-        t1.transform.rotation.w = q[3]
-        self.tf_broadcaster.sendTransform(t1)
+        map_to_map_base_laser_transform.transform.rotation.x = q[0]
+        map_to_map_base_laser_transform.transform.rotation.y = q[1]
+        map_to_map_base_laser_transform.transform.rotation.z = q[2]
+        map_to_map_base_laser_transform.transform.rotation.w = q[3]
+        self.tf_broadcaster.sendTransform(map_to_map_base_laser_transform)
 
 
     def publish_lidar_prediction(self, header, ranges):
