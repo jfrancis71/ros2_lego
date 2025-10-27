@@ -20,7 +20,14 @@ class Localizer(Node):
     def __init__(self):
         super().__init__("nav")
         self.declare_parameter('map', 'my_house.yaml')
+        self.declare_parameter('discrete_num_degrees', 360)
+        self.declare_parameter('discrete_num_x_resolution', .05)
+        self.declare_parameter('discrete_num_y_resolution', .05)
         self.map_file = self.get_parameter('map').get_parameter_value().string_value
+        self.num_degrees = self.get_parameter('discrete_num_degrees').get_parameter_value().integer_value
+        self.discrete_num_x_resolution = self.get_parameter('discrete_num_x_resolution').get_parameter_value().double_value
+        self.discrete_num_y_resolution = self.get_parameter('discrete_num_x_resolution').get_parameter_value().double_value
+
         with open(self.map_file, 'r') as map_file:
             map_properties = yaml.safe_load(map_file)
             self.image_filename = map_properties['image']
@@ -37,9 +44,9 @@ class Localizer(Node):
         self.tf_listener = TransformListener(self.tf_buffer, self)
         self.tf_broadcaster = TransformBroadcaster(self)
         self.map = skimage.io.imread(os.path.join(os.path.split(self.map_file)[0], self.image_filename))
-        self.centers = [[(r,c) for c in range(0, self.map.shape[1], 10)] for r in range(0, self.map.shape[0], 10)]
+        self.centers = [[(r,c) for c in range(0, self.map.shape[1], int(self.discrete_num_x_resolution/self.resolution))] for r in range(0, self.map.shape[0], int(self.discrete_num_y_resolution/self.resolution))]
         self.centers = list(itertools.chain(*self.centers))
-        self.trans = np.array([skimage.transform.warp_polar(self.map==0, center=c, radius=100) for c in self.centers])
+        self.trans = np.array([skimage.transform.warp_polar(self.map==0, center=c, radius=100, output_shape=(self.num_degrees, 100)) for c in self.centers])
         self.polar_coords = np.array([np.argmax(self.trans[c], axis=1)*self.resolution for c in range(len(self.centers))])
 
     def send_map_base_link_transform(self, loc, angle, tim):
@@ -108,7 +115,7 @@ class Localizer(Node):
 
     def lidar_callback(self, lidar_msg):
         scan = np.array(lidar_msg.ranges)
-        new_scan = skimage.transform.resize(scan.astype(np.float32), (360,))
+        new_scan = skimage.transform.resize(scan.astype(np.float32), (self.num_degrees,))
         predictions = np.array([[np.roll(np.flip(self.polar_coords[c]), s) for s in range(359)] for c in range(len(self.centers))])
 
         angles = np.nanmean((predictions - new_scan)**2, axis=0)[np.newaxis, np.newaxis]
