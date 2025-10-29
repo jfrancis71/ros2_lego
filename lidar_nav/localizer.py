@@ -5,6 +5,7 @@ import os
 import yaml
 import skimage
 import numpy as np
+from scipy.linalg import circulant
 import rclpy
 from rclpy.node import Node
 from sensor_msgs.msg import LaserScan
@@ -52,11 +53,8 @@ class MCL:
         new_scan = skimage.transform.resize(scan.astype(np.float32), (360,))
         trans = np.array([skimage.transform.warp_polar(self.map_image==0, center=loc, radius=100, output_shape=(360, 100)) for loc in self.particles])
         polar_coords = np.argmax(trans, axis=2)*self.resolution
-        print("POL=", polar_coords.shape)
-        predictions = np.array([[np.roll(np.flip(polar_coords[c]), s) for s in range(360)] for c in range(len(self.particles))])
-        print("PRED=", predictions.shape)
+        predictions = np.array([ np.transpose(circulant(np.flip(polar_coords[c]))) for c in range(len(self.particles))])
         prediction_error = np.nanmean((predictions - new_scan)**2, axis=2)
-        print("PRED ERR=", prediction_error.shape)
         probs = np.exp(-prediction_error)
         idx = np.unravel_index(np.argmin(prediction_error), prediction_error.shape)
         loc = idx[0]
@@ -65,12 +63,10 @@ class MCL:
         y = (self.map_height-self.particles[loc][0])*self.resolution + self.origin[1]
         norm = probs.max(axis=1)
         norm_1 = norm/norm.sum()
+        print("publish...")
         ls = np.array(np.random.choice(np.arange(len(self.particles)), size=150, p=norm_1))
-        #print("ls=", ls)
         self.particles = [self.particles[idx] for idx in ls]
         self.particles = [ (self.particles[idx][0]+np.random.normal(), self.particles[idx][1]+np.random.normal()) for idx in range(150)]
-        #print("SF=", self.particles)
-        print("out=", predictions[loc][idx[1]].shape)
         return (x, y), angle, predictions[loc][idx[1]]
 
 
@@ -163,7 +159,6 @@ class Localizer(Node):
         lidar_msg1.ranges = ranges
         lidar_msg1.angle_min = 0.0
         lidar_msg1.angle_max = 6.28318548
-        print("R=", ranges.shape)
         lidar_msg1.angle_increment = 2 * np.pi / self.discrete_num_degrees
         lidar_msg1.time_increment = 0.00019850002718158066
         lidar_msg1.scan_time = 0.10004401206970215
