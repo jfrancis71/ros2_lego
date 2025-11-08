@@ -27,9 +27,6 @@ class StereoSplitNode(Node):
                 self.create_publisher(CameraInfo, "/stereo/right/camera_info", 1)
         self.left_srv = self.create_service(SetCameraInfo, '/stereo/left_camera/set_camera_info', self.set_left_camera_info_callback)
         self.right_srv = self.create_service(SetCameraInfo, '/stereo/right_camera/set_camera_info', self.set_right_camera_info_callback)
-        #self.left_srv = self.create_service(SetCameraInfo, 'left_camera/set_camera_info', self.set_left_camera_info_callback)
-        #self.right_srv = self.create_service(SetCameraInfo, 'right_camera/set_camera_info', self.set_right_camera_info_callback)
-        self.bridge = CvBridge()
         self.bridge = CvBridge()
         self.left_cam_info = None
         self.right_cam_info = None
