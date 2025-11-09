@@ -31,9 +31,9 @@ class StereoSplitNode(Node):
                 self.create_publisher(CameraInfo, "/stereo/right/camera_info", 1)
         self.bridge = CvBridge()
         self.left_ci = CameraInfoManager(self,
-            url="file://${ROS_HOME}/camera_info/stereo/left_camera.yaml", namespace="/stereo/left_camera")
+            url="file://${ROS_HOME}/camera_info/stereo/left.yaml", namespace="/stereo/left")
         self.right_ci = CameraInfoManager(self,
-            url="file://${ROS_HOME}/camera_info/stereo/right_camera.yaml", namespace="/stereo/right_camera")
+            url="file://${ROS_HOME}/camera_info/stereo/right.yaml", namespace="/stereo/right")
         self.left_ci.loadCameraInfo()
         self.right_ci.loadCameraInfo()
 
