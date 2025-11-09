@@ -1,3 +1,6 @@
+# This uses CameraInfoManager, works with https://github.com/furbrain/image_common
+# You might to selectively build just the camera_info_manager_py package (from above).
+
 import rclpy
 from rclpy.node import Node
 from sensor_msgs.msg import Image
@@ -7,6 +10,7 @@ import cv2
 import numpy as np
 import yaml
 from sensor_msgs.srv import SetCameraInfo
+from camera_info_manager import CameraInfoManager
 
 
 class StereoSplitNode(Node):
@@ -25,25 +29,11 @@ class StereoSplitNode(Node):
                 self.create_publisher(CameraInfo, "/stereo/left/camera_info", 1)
         self.right_cam_info_publisher = \
                 self.create_publisher(CameraInfo, "/stereo/right/camera_info", 1)
-        self.left_srv = self.create_service(SetCameraInfo, '/stereo/left_camera/set_camera_info', self.set_left_camera_info_callback)
-        self.right_srv = self.create_service(SetCameraInfo, '/stereo/right_camera/set_camera_info', self.set_right_camera_info_callback)
         self.bridge = CvBridge()
-        self.left_cam_info = None
-        self.right_cam_info = None
-
-    def set_left_camera_info_callback(self, request, response):
-        print("Hello received left service request.")
-        self.left_cam_info = request.camera_info
-        response.success = True
-        response.status_message = ""
-        return response
-
-    def set_right_camera_info_callback(self, request, response):
-        print("Hello received right service request.")
-        self.right_cam_info = request.camera_info
-        response.success = True
-        response.status_message = ""
-        return response
+        self.left_ci = CameraInfoManager(self, namespace="/stereo/left_camera")
+        self.right_ci = CameraInfoManager(self, namespace="/stereo/right_camera")
+        self.left_ci.loadCameraInfo()
+        self.right_ci.loadCameraInfo()
 
     def image_callback(self, image_msg):
         cv_image = self.bridge.imgmsg_to_cv2(image_msg, desired_encoding='bgr8')
@@ -53,11 +43,11 @@ class StereoSplitNode(Node):
         right_ros2_image_msg = self.bridge.cv2_to_imgmsg(cv_image[:, 320:], encoding="bgr8")
         right_ros2_image_msg.header = image_msg.header
         self.right_image_publisher.publish(right_ros2_image_msg)
-        if self.left_cam_info is not None and self.right_cam_info is not None:
-            self.left_cam_info.header = image_msg.header
-            self.right_cam_info.header = image_msg.header
-            self.left_cam_info_publisher.publish(self.left_cam_info)
-            self.right_cam_info_publisher.publish(self.right_cam_info)
+        if self.left_ci.camera_info is not None and self.right_ci.camera_info is not None:
+            self.left_ci.camera_info.header = image_msg.header
+            self.right_ci.camera_info.header = image_msg.header
+            self.left_cam_info_publisher.publish(self.left_ci.camera_info)
+            self.right_cam_info_publisher.publish(self.right_ci.camera_info)
 
 
 rclpy.init()
