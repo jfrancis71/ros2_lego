@@ -39,7 +39,7 @@ class StereoSplitNode(Node):
 
     def image_callback(self, image_msg):
         cv_image = self.bridge.imgmsg_to_cv2(image_msg, desired_encoding='bgr8')
-        mono_image_width = cv_image.shape[1]
+        mono_image_width = cv_image.shape[1]//2
         left_ros2_image_msg = self.bridge.cv2_to_imgmsg(cv_image[:, :mono_image_width], encoding="bgr8")
         left_ros2_image_msg.header = image_msg.header
         self.left_image_publisher.publish(left_ros2_image_msg)
