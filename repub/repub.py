@@ -30,17 +30,20 @@ class StereoSplitNode(Node):
         self.right_cam_info_publisher = \
                 self.create_publisher(CameraInfo, "/stereo/right/camera_info", 1)
         self.bridge = CvBridge()
-        self.left_ci = CameraInfoManager(self, namespace="/stereo/left_camera")
-        self.right_ci = CameraInfoManager(self, namespace="/stereo/right_camera")
+        self.left_ci = CameraInfoManager(self,
+            url="file://${ROS_HOME}/camera_info/stereo/left_camera.yaml", namespace="/stereo/left_camera")
+        self.right_ci = CameraInfoManager(self,
+            url="file://${ROS_HOME}/camera_info/stereo/right_camera.yaml", namespace="/stereo/right_camera")
         self.left_ci.loadCameraInfo()
         self.right_ci.loadCameraInfo()
 
     def image_callback(self, image_msg):
         cv_image = self.bridge.imgmsg_to_cv2(image_msg, desired_encoding='bgr8')
-        left_ros2_image_msg = self.bridge.cv2_to_imgmsg(cv_image[:, :320], encoding="bgr8")
+        mono_image_width = cv_image.shape[1]
+        left_ros2_image_msg = self.bridge.cv2_to_imgmsg(cv_image[:, :mono_image_width], encoding="bgr8")
         left_ros2_image_msg.header = image_msg.header
         self.left_image_publisher.publish(left_ros2_image_msg)
-        right_ros2_image_msg = self.bridge.cv2_to_imgmsg(cv_image[:, 320:], encoding="bgr8")
+        right_ros2_image_msg = self.bridge.cv2_to_imgmsg(cv_image[:, mono_image_width:], encoding="bgr8")
         right_ros2_image_msg.header = image_msg.header
         self.right_image_publisher.publish(right_ros2_image_msg)
         if self.left_ci.camera_info is not None and self.right_ci.camera_info is not None:
