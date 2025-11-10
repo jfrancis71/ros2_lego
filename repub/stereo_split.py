@@ -16,6 +16,8 @@ from camera_info_manager import CameraInfoManager
 class StereoSplitNode(Node):
     def __init__(self):
         super().__init__("stereo_split_node")
+        self.declare_parameter('left_camera_info_url', '')
+        self.declare_parameter('right_camera_info_url', '')
         self.subscription = self.create_subscription(
             Image,
             "/image",
@@ -31,9 +33,13 @@ class StereoSplitNode(Node):
                 self.create_publisher(CameraInfo, "/stereo/right/camera_info", 1)
         self.bridge = CvBridge()
         self.left_ci = CameraInfoManager(self,
-            url="file://${ROS_HOME}/camera_info/stereo/left.yaml", namespace="/stereo/left")
+            url=self.get_parameter('left_camera_info_url'). \
+                get_parameter_value().string_value,
+            namespace="/stereo/left")
         self.right_ci = CameraInfoManager(self,
-            url="file://${ROS_HOME}/camera_info/stereo/right.yaml", namespace="/stereo/right")
+            url=self.get_parameter('right_camera_info_url'). \
+                get_parameter_value().string_value,
+            namespace="/stereo/right")
         self.left_ci.loadCameraInfo()
         self.right_ci.loadCameraInfo()
 
