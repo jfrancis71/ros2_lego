@@ -15,3 +15,7 @@ To Fetch remote branch into local branch:
 git fetch remote_lego remote_branch_name:local_branch_name
 ```
 
+```
+git cat-file -p hashid
+```
+Prints out contents of object, -p option says figure out type, eg tree, commit, blob etc
