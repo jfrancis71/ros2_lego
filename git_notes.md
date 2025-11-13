@@ -27,3 +27,7 @@ git branch --all
 ```
 shows all branches both local and remote
 
+To show all objects:
+```
+git cat-file --batch-all-objects --batch-check
+```
