@@ -15,6 +15,9 @@ from tf_transformations import quaternion_from_euler
 from tf2_ros.buffer import Buffer
 from tf2_ros.transform_listener import TransformListener
 from tf2_ros import TransformException
+from scipy import ndimage as ndi
+from skimage._shared.utils import _to_ndimage_mode
+from skimage._shared.utils import convert_to_float
 
 
 class DiscreteLocalizer:
@@ -49,9 +52,30 @@ class MCL:
         self.map_width = map_image.shape[1]
         self.particles = [(self.map_height*np.random.random(), self.map_width*np.random.random()) for m in range(150)]
 
+    def predictions(self, map_image, particles):
+        height = 360
+        k_radius = 100 / 100
+        k_angle = height / (2 * np.pi)
+        warped = []
+        ndi_mode = _to_ndimage_mode('constant')
+        image = map_image==0
+        for loc in particles:
+            def coord_map(output_coords):
+                angle = output_coords[:, 1] / k_angle
+                rr = ((output_coords[:, 0] / k_radius) * np.sin(angle)) + loc[0]
+                cc = ((output_coords[:, 0] / k_radius) * np.cos(angle)) + loc[1]
+                coords = np.column_stack((cc, rr))
+                return coords
+            coords = skimage.transform.warp_coords(coord_map, (360, 100))
+            warpd = ndi.map_coordinates(image, coords, prefilter=False, mode=ndi_mode, order=0, cval=0.0)
+            skimage.transform._warps._clip_warp_output(image, warpd, 'constant', 0.0, True)
+            warped.append(warpd)
+        return np.array(warped)
+
     def localize(self, scan):
         new_scan = skimage.transform.resize(scan.astype(np.float32), (360,))
-        trans = np.array([skimage.transform.warp_polar(self.map_image==0, center=loc, radius=100, output_shape=(360, 100)) for loc in self.particles])
+        trans = self.predictions(self.map_image, self.particles)
+
         polar_coords = np.argmax(trans, axis=2)*self.resolution
         predictions = np.array([ np.transpose(circulant(np.flip(polar_coords[c]))) for c in range(len(self.particles))])
         prediction_error = np.nanmean((predictions - new_scan)**2, axis=2)
