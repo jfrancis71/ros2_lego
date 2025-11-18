@@ -60,21 +60,13 @@ class MCL:
             cc = ((output_coords[:, 0] / k_radius) * np.cos(angle))
             coords = np.column_stack((cc, rr))
             return coords
-        self.x = skimage.transform.warp_coords(coord_map1, (360, 100))[0][:, :, np.newaxis]
-        self.y = skimage.transform.warp_coords(coord_map1, (360, 100))[1][:, :, np.newaxis]
+        self.c = skimage.transform.warp_coords(coord_map1, (360, 100))
+        self.wa = np.transpose(self.c, axes=(1, 2, 0))[:, :, np.newaxis, :]
 
     def predictions(self, map_image, particles):
         ndi_mode = _to_ndimage_mode('constant')
         image = map_image==0
-        def coord_map1(output_coords):
-            angle = output_coords[:, 1] / k_angle
-            rr = ((output_coords[:, 0] / k_radius) * np.sin(angle))
-            cc = ((output_coords[:, 0] / k_radius) * np.cos(angle))
-            coords = np.column_stack((cc, rr))
-            return coords
-        coords1_x = np.transpose(self.x + np.array(self.particles)[:, 0], axes=(2,0,1))
-        coords1_y = np.transpose(self.y + np.array(self.particles)[:, 1], axes=(2,0,1))
-        coords1 = np.stack([coords1_x, coords1_y])
+        coords1 = np.transpose(self.wa + np.array(self.particles), axes=(3,2,0,1))
         warpd = ndi.map_coordinates(image, coords1, prefilter=False, mode=ndi_mode, order=0, cval=0.0)
         skimage.transform._warps._clip_warp_output(image, warpd, 'constant', 0.0, True)
         return np.array(warpd)
@@ -84,7 +76,6 @@ class MCL:
         trans = self.predictions(self.map_image, self.particles)
         polar_coords = np.argmax(trans, axis=2)*self.resolution
         predictions = np.array([ np.transpose(circulant(np.flip(polar_coords[c]))) for c in range(len(self.particles))])
-        #predictions = np.zeros((150, 360, 360))
         prediction_error = np.nanmean((predictions - new_scan)**2, axis=2)
         probs = np.exp(-prediction_error)
         idx = np.unravel_index(np.argmin(prediction_error), prediction_error.shape)
