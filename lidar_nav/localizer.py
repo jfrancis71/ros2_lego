@@ -51,6 +51,7 @@ class MCL:
         self.map_height = map_image.shape[0]
         self.map_width = map_image.shape[1]
         self.particles = [(self.map_height*np.random.random(), self.map_width*np.random.random()) for m in range(150)]
+        self.particles = np.transpose(np.array([ self.map_height*np.random.random(size=150), self.map_width*np.random.random(size=150) ]))
         height = 360
         k_radius = 100 / 100
         k_angle = height / (2 * np.pi)
@@ -66,7 +67,7 @@ class MCL:
     def predictions(self, map_image, particles):
         ndi_mode = _to_ndimage_mode('constant')
         image = map_image==0
-        coords1 = np.transpose(self.wa + np.array(self.particles), axes=(3,2,0,1))
+        coords1 = np.transpose(self.wa + self.particles, axes=(3,2,0,1))
         warpd = ndi.map_coordinates(image, coords1, prefilter=False, mode=ndi_mode, order=0, cval=0.0)
         skimage.transform._warps._clip_warp_output(image, warpd, 'constant', 0.0, True)
         return warpd
@@ -87,10 +88,8 @@ class MCL:
         norm_1 = norm/norm.sum()
         print("publish...")
         ls = np.array(np.random.choice(np.arange(len(self.particles)), size=150, p=norm_1))
-        self.particles = [self.particles[idx] for idx in ls]
-        self.particles = [ (self.particles[idx][0]+np.random.normal(), self.particles[idx][1]+np.random.normal()) for idx in range(150)]
+        self.particles = self.particles[ls] + np.random.normal(size=(150, 2))
         return (x, y), angle, predictions[loc][idx[1]]
-
 
 
 class Localizer(Node):
