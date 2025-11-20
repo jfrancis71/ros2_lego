@@ -87,8 +87,9 @@ class MCL:
         norm = probs.max(axis=1)
         norm_1 = norm/norm.sum()
         print("publish...")
-        ls = np.array(np.random.choice(np.arange(len(self.particles)), size=150, p=norm_1))
-        self.particles = self.particles[ls] + .1 * np.random.normal(size=(150, 2))
+        ls = np.array(np.random.choice(np.arange(len(self.particles)), size=130, p=norm_1))
+        self.particles[:130] = self.particles[ls] + .1 * np.random.normal(size=(130, 2))
+        self.particles[130:] = np.transpose(np.array([ self.map_height*np.random.random(size=20), self.map_width*np.random.random(size=20) ]))
         return (x, y), angle, predictions[loc][idx[1]]
 
 
