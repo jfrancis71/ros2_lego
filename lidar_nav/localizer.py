@@ -88,7 +88,7 @@ class MCL:
         norm_1 = norm/norm.sum()
         print("publish...")
         ls = np.array(np.random.choice(np.arange(len(self.particles)), size=150, p=norm_1))
-        self.particles = self.particles[ls] + np.random.normal(size=(150, 2))
+        self.particles = self.particles[ls] + .1 * np.random.normal(size=(150, 2))
         return (x, y), angle, predictions[loc][idx[1]]
 
 
