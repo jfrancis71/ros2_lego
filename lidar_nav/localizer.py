@@ -69,13 +69,13 @@ class MCL:
         coords1 = np.transpose(self.wa + np.array(self.particles), axes=(3,2,0,1))
         warpd = ndi.map_coordinates(image, coords1, prefilter=False, mode=ndi_mode, order=0, cval=0.0)
         skimage.transform._warps._clip_warp_output(image, warpd, 'constant', 0.0, True)
-        return np.array(warpd)
+        return warpd
 
     def localize(self, scan):
         new_scan = skimage.transform.resize(scan.astype(np.float32), (360,))
         trans = self.predictions(self.map_image, self.particles)
         polar_coords = np.argmax(trans, axis=2)*self.resolution
-        predictions = np.array([ np.transpose(circulant(np.flip(polar_coords[c]))) for c in range(len(self.particles))])
+        predictions = np.transpose(circulant(np.flip(polar_coords, axis=1)), axes=(0, 2, 1))
         prediction_error = np.nanmean((predictions - new_scan)**2, axis=2)
         probs = np.exp(-prediction_error)
         idx = np.unravel_index(np.argmin(prediction_error), prediction_error.shape)
