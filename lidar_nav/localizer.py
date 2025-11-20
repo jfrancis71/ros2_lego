@@ -9,6 +9,8 @@ from scipy.linalg import circulant
 import rclpy
 from rclpy.node import Node
 from sensor_msgs.msg import LaserScan
+from sensor_msgs.msg import PointCloud2
+from sensor_msgs_py import point_cloud2
 from geometry_msgs.msg import TransformStamped
 from tf2_ros import TransformBroadcaster
 from tf_transformations import quaternion_from_euler
@@ -116,7 +118,9 @@ class Localizer(Node):
             self.lidar_callback,
             1)
         self.pred_publisher = \
-            self.create_publisher(LaserScan, "/pred_laser", 10)
+            self.create_publisher(LaserScan, "/pred_laser", 1)
+        self.particles_publisher = \
+            self.create_publisher(PointCloud2, "/particles", 1)
         self.tf_buffer = Buffer()
         self.tf_listener = TransformListener(self.tf_buffer, self)
         self.tf_broadcaster = TransformBroadcaster(self)
@@ -189,11 +193,21 @@ class Localizer(Node):
         lidar_msg1.header = header
         self.pred_publisher.publish(lidar_msg1)
 
+    def publish_point_cloud(self, header, particles):
+        points = np.zeros([particles.shape[0], 3])
+        points[:, 0] = particles[:, 1]*self.localizer.resolution + self.localizer.origin[0]
+        points[:, 1] = (self.localizer.map_height-particles[:, 0])*self.localizer.resolution + self.localizer.origin[1]
+        cloud_msg = point_cloud2.create_cloud_xyz32(header, points)
+        print(points)
+        cloud_msg.header.frame_id = "map"
+        self.particles_publisher.publish(cloud_msg)
+
     def lidar_callback(self, lidar_msg):
         scan = np.array(lidar_msg.ranges)
         loc, angle, predictions = self.localizer.localize(scan)
         self.send_map_base_link_transform(loc, angle, None)
         self.publish_lidar_prediction(lidar_msg.header, predictions)
+        self.publish_point_cloud(lidar_msg.header, self.localizer.particles)
 
 
 rclpy.init()
