@@ -31,21 +31,31 @@ $$
 = \int \frac{p(x_n|z_n) p(z_n | x_{1..n-1})}{p(x_n|x_{1..n-1})} f(z_n) dz_n
 $$
 
+The denominator is just a number:
 
 $$
-= \int \frac{p(x_n|z_n) p(z_n | x_{1..n-1})}{ \int p(x_n,z_n|x_{1..n-1}) dz_n} f(z_n) dz_n
+= \frac{\int p(x_n|z_n) p(z_n | x_{1..n-1}) f(z_n) dz_n}{p(x_n|x_{1..n-1})}
 $$
 
+Reverse marginalising the denominator
+
 $$
-= \int \frac{p(x_n|z_n) p(z_n | x_{1..n-1})}{ \int p(z_n|x_{1..n-1}) p(x_n|z_n, x_{1..n-1}) dz_n} f(z_n) dz_n
+= \frac{\int p(x_n|z_n) p(z_n | x_{1..n-1}) f(z_n) dz_n}{ \int p(x_n,z_n|x_{1..n-1}) dz_n}
+$$
+
+Refactoring the denominator by chain rule:
+
+$$
+= \frac{\int p(x_n|z_n) p(z_n | x_{1..n-1}) f(z_n) dz_n}{ \int p(z_n|x_{1..n-1}) p(x_n|z_n, x_{1..n-1}) dz_n}
 $$
 
 By conditional independence:
 
 $$
-= \int \frac{p(x_n|z_n) p(z_n | x_{1..n-1})}{ \int p(z_n|x_{1..n-1}) p(x_n|z_n) dz_n} f(z_n) dz_n
+= \frac{\int p(x_n|z_n) p(z_n | x_{1..n-1}) f(z_n) dz_n}{ \int p(z_n|x_{1..n-1}) p(x_n|z_n) dz_n}
 $$
 
+Turning into expectations:
 
 $$
 = \frac{E_{z_n \sim p(z_n|x_{1..n-1})}[f(z) p(x_n|z_n)]}{E_{z_n \sim p(z_n|x_{1..n-1})}[p(x_n|z_n)]}
