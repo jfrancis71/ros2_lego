@@ -9,6 +9,10 @@ We are ignoring control signals for the initial analysis:
 
 The setup is we would like to compute an expectation $E_{z\sim p(z_n|x_{1..n})}[f(z)]$
 
+## Section 1
+
+We demonstrate how to compute $E_{z\sim p(z_n|x_{1..n})}[f(z)]$ using samples from $p(z_n|x_{1..n-1})$
+
 $$
 E_{z\sim p(z_n|x_{1..n})}[f(z)] = \int p(z_n|x_{1..n}) f(z_n) dz_n
 $$
@@ -64,11 +68,49 @@ $$
 We can estimate this by taking N samples from $p(z_n|x_{1..n-1})$ and computing:
 
 $$
-\sum_i f(z_i) w_i
+So E_{z\sim p(z_n|x_{1..n})}[f(z)] \\approx \sum_i f(z_i) w_i
 $$
 
 where:
 
 $$
 w_i = \frac{p(x_n|z_i)}{\sum_i' p(x_n|z_i')}
+$$
+
+## Section 2
+
+Reverse marginalising:
+
+$$
+p(z_n|x_{1..n-1}) = \int p(z_n,z_{n-1}|x_{1..n-1}) dz_{n-1}
+$$
+
+Chain rule:
+
+$$
+= \int p(z_n|z_{n-1},x_{1..n-1}) p(z_{n-1}|x_{1..n-1}) dz_{n-1}
+$$
+
+Conditional independence:
+
+$$
+= \int p(z_n|z_{n-1}) p(z_{n-1}|x_{1..n-1}) dz_{n-1}
+$$
+
+Seperate out $x_{n-1}$
+
+$$
+= \int p(z_n|z_{n-1}) p(z_{n-1}|x_{n-1}, x_{1..n-2}) dz_{n-1}
+$$
+
+Apply Bayes rule:
+
+$$
+= \int p(z_n|z_{n-1}) \frac{p(z_n|x_{1..n-2}) p(x_{n-1}|z_n, x_{1..n-2})}{p(x_n-1|x_{1..n-2})} dz_{n-1}
+$$
+
+Denominator is constant wrt $z_{n-1}$:
+
+$$
+= \frac{\int p(z_n|z_{n-1}) p(z_n|x_{1..n-2}) p(x_{n-1}|z_n, x_{1..n-2}) dz_{n-1}}{p(x_n-1|x_{1..n-2})}
 $$
