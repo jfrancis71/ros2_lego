@@ -60,3 +60,15 @@ Turning into expectations:
 $$
 = \frac{E_{z_n \sim p(z_n|x_{1..n-1})}[f(z) p(x_n|z_n)]}{E_{z_n \sim p(z_n|x_{1..n-1})}[p(x_n|z_n)]}
 $$
+
+We can estimate this by taking N samples from $p(z_n|x_{1..n-1})$ and computing:
+
+$$
+\sum_i f(z_i) w_i
+$$
+
+where:
+
+$$
+w_i = \frac{p(x_n|z_i)}{\sum_i' p(x_n|z_i')}
+$$
