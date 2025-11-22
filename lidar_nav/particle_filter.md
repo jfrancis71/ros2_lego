@@ -139,3 +139,9 @@ Applying conditional independence to denominator
 $$
 = \frac{\int p(z_n|z_{n-1}) p(z_{n-1}|x_{1..n-2}) p(x_{n-1}|z_{n-1}) dz_{n-1}}{\int p(x_{n-1}|z_{n-1}) p(z_{n-1}|x_{1..n-2}) dz_{n-1}}
 $$
+
+Expressing as an expectation:
+
+$$
+= \frac{E_{z_{n-1} \sim p(z_{n-1} | x_{1..n-2})} [p(z_n|z_{n-1}) p(x_{n-1}|z_{n-1})]}{E_{z_{n-1} \sim p(z_{n-1} | x_{1..n-2})} [p(x_{n-1}|z_{n-1})]}
+$$
