@@ -106,11 +106,36 @@ $$
 Apply Bayes rule:
 
 $$
-= \int p(z_n|z_{n-1}) \frac{p(z_n|x_{1..n-2}) p(x_{n-1}|z_n, x_{1..n-2})}{p(x_n-1|x_{1..n-2})} dz_{n-1}
+= \int p(z_n|z_{n-1}) \frac{p(z_{n-1}|x_{1..n-2}) p(x_{n-1}|z_{n-1}, x_{1..n-2})}{p(x_{n-1}|x_{1..n-2})} dz_{n-1}
 $$
+
+Apply conditional independence rule:
+
+$$
+= \int p(z_n|z_{n-1}) \frac{p(z_{n-1}|x_{1..n-2}) p(x_{n-1}|z_{n-1})}{p(x_{n-1}|x_{1..n-2})} dz_{n-1}
+$$
+
 
 Denominator is constant wrt $z_{n-1}$:
 
 $$
-= \frac{\int p(z_n|z_{n-1}) p(z_n|x_{1..n-2}) p(x_{n-1}|z_n, x_{1..n-2}) dz_{n-1}}{p(x_n-1|x_{1..n-2})}
+= \frac{\int p(z_n|z_{n-1}) p(z_{n-1}|x_{1..n-2}) p(x_{n-1}|z_{n-1}) dz_{n-1}}{p(x_{n-1}|x_{1..n-2})}
+$$
+
+Reverse marginalising the denominator wrt z_n:
+
+$$
+= \frac{\int p(z_n|z_{n-1}) p(z_{n-1}|x_{1..n-2}) p(x_{n-1}|z_{n-1}) dz_{n-1}}{\int p(z_{n-1}, x_{n-1}|x_{1..n-2}) dz_{n-1}}
+$$
+
+Applying chain rule to denominator:
+
+$$
+= \frac{\int p(z_n|z_{n-1}) p(z_{n-1}|x_{1..n-2}) p(x_{n-1}|z_{n-1}) dz_{n-1}}{\int p(x_{n-1}|z_{n-1}, x_{1..n-2}) p(z_{n-1}|x_{1..n-2}) dz_{n-1}}
+$$
+
+Applying conditional independence to denominator
+
+$$
+= \frac{\int p(z_n|z_{n-1}) p(z_{n-1}|x_{1..n-2}) p(x_{n-1}|z_{n-1}) dz_{n-1}}{\int p(x_{n-1}|z_{n-1}) p(z_{n-1}|x_{1..n-2}) dz_{n-1}}
 $$
