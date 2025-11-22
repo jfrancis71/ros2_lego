@@ -5,6 +5,8 @@ Bishop p645
 We have a robot that provides a stream of observations from a sensor (eg a Lidar) and want to estimate its position.
 We will call the sequence of observations x and positions z.
 
+Presumably we could use Metropolis or Metropolis-Hastings to solve this problem, but it would be inefficient from both a memory and computational perspective as it would require storing entire observation history. Instead we turn to the Particle Filter formalism which exploits independence properties in the sequential structure to gain efficiency.
+
 We are ignoring control signals for the initial analysis:
 
 The setup is we would like to compute an expectation $E_{z\sim p(z_n|x_{1..n})}[f(z)]$
