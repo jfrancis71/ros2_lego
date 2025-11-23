@@ -30,6 +30,8 @@ We construct a discrete probability distribution over our samples from q and for
 
 It is not exact as, for example if p is a normal distribution our samples may repeat themselves which has zero probability for a normal distribution (no two seperate samples are likely to be exactly equal). Nevertheless for the purposes of computing expectations this is approximately correct and improves with larger N.
 
+The reference constructs an argument for univariate distributions.
+
 ## Reference
 
 Bishop, C.M. (2006), Pattern Recognition and Machine Learning, p.534
