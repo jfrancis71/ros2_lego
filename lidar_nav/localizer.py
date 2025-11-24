@@ -22,29 +22,6 @@ from skimage._shared.utils import _to_ndimage_mode
 from skimage._shared.utils import convert_to_float
 
 
-class DiscreteLocalizer:
-    def __init__(self, map_image, origin, resolution, num_degrees, num_x_resolution, num_y_resolution):
-        self.num_degrees = num_degrees
-        self.resolution = resolution
-        self.origin = origin
-        self.centers = [[(r,c) for c in range(0, map_image.shape[1], int(num_x_resolution/resolution))] for r in range(0, map_image.shape[0], int(num_y_resolution/resolution))]
-        self.centers = list(itertools.chain(*self.centers))
-        self.trans = np.array([skimage.transform.warp_polar(map_image==0, center=c, radius=100, output_shape=(num_degrees, 100)) for c in self.centers])
-        self.polar_coords = np.array([np.argmax(self.trans[c], axis=1)*resolution for c in range(len(self.centers))])
-        self.map_height = map_image.shape[0]
-
-    def localize(self, scan):
-        new_scan = skimage.transform.resize(scan.astype(np.float32), (self.num_degrees,))
-        predictions = np.array([[np.roll(np.flip(self.polar_coords[c]), s) for s in range(self.num_degrees)] for c in range(len(self.centers))])
-
-        angles = np.nanmean((predictions - new_scan)**2, axis=0)[np.newaxis, np.newaxis]
-        prediction_error = np.nanmean((predictions - new_scan)**2, axis=2)
-        idx = np.unravel_index(np.argmin(prediction_error), prediction_error.shape)
-        loc = idx[0]
-        angle = 2 * np.pi * idx[1]/self.num_degrees
-        return (self.centers[loc][1]*self.resolution + self.origin[0], (self.map_height-self.centers[loc][0])*self.resolution + self.origin[1]), angle, predictions[loc][idx[1]]
-
-
 class MCL:
     def __init__(self, map_image, origin, resolution):
         self.map_image = map_image
@@ -100,13 +77,8 @@ class Localizer(Node):
         super().__init__("nav")
         self.declare_parameter('map', 'my_house.yaml')
         self.declare_parameter('discrete_num_degrees', 360)
-        self.declare_parameter('discrete_num_x_resolution', .05)
-        self.declare_parameter('discrete_num_y_resolution', .05)
         self.map_file = self.get_parameter('map').get_parameter_value().string_value
         self.discrete_num_degrees = self.get_parameter('discrete_num_degrees').get_parameter_value().integer_value
-        discrete_num_x_resolution = self.get_parameter('discrete_num_x_resolution').get_parameter_value().double_value
-        discrete_num_y_resolution = self.get_parameter('discrete_num_x_resolution').get_parameter_value().double_value
-
         with open(self.map_file, 'r') as map_file:
             map_properties = yaml.safe_load(map_file)
             image_filename = map_properties['image']
@@ -125,8 +97,6 @@ class Localizer(Node):
         self.tf_listener = TransformListener(self.tf_buffer, self)
         self.tf_broadcaster = TransformBroadcaster(self)
         map = skimage.io.imread(os.path.join(os.path.split(self.map_file)[0], image_filename))
-#        self.localizer = DiscreteLocalizer(map, origin, resolution, self.discrete_num_degrees, discrete_num_x_resolution, discrete_num_y_resolution)
-#        self.localizer = MetropolisLocalizer(map, origin, resolution)
         self.localizer = MCL(map, origin, resolution)
 
     def send_map_base_link_transform(self, loc, angle, tim):
