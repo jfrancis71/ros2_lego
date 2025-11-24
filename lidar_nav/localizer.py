@@ -29,30 +29,35 @@ class MCL:
         self.resolution = resolution
         self.map_height = map_image.shape[0]
         self.map_width = map_image.shape[1]
-        self.particles = [(self.map_height*np.random.random(), self.map_width*np.random.random()) for m in range(150)]
-        self.particles = np.transpose(np.array([ self.map_height*np.random.random(size=150), self.map_width*np.random.random(size=150) ]))
-        height = 360
+        self.num_particles = 150
+        self.num_angles = 360  # Number of buckets in our angle quantization
+        self.max_radius = 100  # Maximum radius in pixels that we make predictions over.
+        self.particles = np.transpose(np.array([ self.map_height*np.random.random(size=self.num_particles), self.map_width*np.random.random(size=self.num_particles) ]))
+        height = self.num_angles
         k_radius = 100 / 100
         k_angle = height / (2 * np.pi)
-        def coord_map1(output_coords):
+        def coord_map_fn(output_coords):
             angle = output_coords[:, 1] / k_angle
             rr = ((output_coords[:, 0] / k_radius) * np.sin(angle))
             cc = ((output_coords[:, 0] / k_radius) * np.cos(angle))
             coords = np.column_stack((cc, rr))
             return coords
-        self.c = skimage.transform.warp_coords(coord_map1, (360, 100))
-        self.wa = np.transpose(self.c, axes=(1, 2, 0))[:, :, np.newaxis, :]
+        c = skimage.transform.warp_coords(coord_map_fn, (self.num_angles, self.max_radius))
+        # The last column gives (x,y) coordinates in our image grid of point
+        # using polar coordinates from the first two indices.
+        # coord_map has shape [self.num_angles, self.num_radius, 1, 2]
+        self.coord_map = np.transpose(c, axes=(1, 2, 0))[:, :, np.newaxis, :]
+        self.ndi_mode = _to_ndimage_mode('constant')
 
     def predictions(self, map_image, particles):
-        ndi_mode = _to_ndimage_mode('constant')
         image = map_image==0
-        coords1 = np.transpose(self.wa + self.particles, axes=(3,2,0,1))
-        warpd = ndi.map_coordinates(image, coords1, prefilter=False, mode=ndi_mode, order=0, cval=0.0)
-        skimage.transform._warps._clip_warp_output(image, warpd, 'constant', 0.0, True)
-        return warpd
+        trans_coords = np.transpose(self.coord_map + self.particles, axes=(3,2,0,1))
+        polar_coord_predictions = ndi.map_coordinates(image, trans_coords, prefilter=False, mode=self.ndi_mode, order=0, cval=0.0)
+        skimage.transform._warps._clip_warp_output(image, polar_coord_predictions, 'constant', 0.0, True)
+        return polar_coord_predictions
 
     def localize(self, scan):
-        new_scan = skimage.transform.resize(scan.astype(np.float32), (360,))
+        new_scan = skimage.transform.resize(scan.astype(np.float32), (self.num_angles,))
         trans = self.predictions(self.map_image, self.particles)
         polar_coords = np.argmax(trans, axis=2)*self.resolution
         predictions = np.transpose(circulant(np.flip(polar_coords, axis=1)), axes=(0, 2, 1))
@@ -60,14 +65,14 @@ class MCL:
         probs = np.exp(-prediction_error)
         idx = np.unravel_index(np.argmin(prediction_error), prediction_error.shape)
         loc = idx[0]
-        angle = 2 * np.pi * idx[1]/360
+        angle = 2 * np.pi * idx[1]/self.num_angles
         x = self.particles[loc][1]*self.resolution + self.origin[0]
         y = (self.map_height-self.particles[loc][0])*self.resolution + self.origin[1]
         norm = probs.max(axis=1)
         norm_1 = norm/norm.sum()
         print("publish...")
         ls = np.array(np.random.choice(np.arange(len(self.particles)), size=130, p=norm_1))
-        self.particles[:130] = self.particles[ls] + .1 * np.random.normal(size=(130, 2))
+        self.particles[:130] = self.particles[ls] + 1 * np.random.normal(size=(130, 2))
         self.particles[130:] = np.transpose(np.array([ self.map_height*np.random.random(size=20), self.map_width*np.random.random(size=20) ]))
         return (x, y), angle, predictions[loc][idx[1]]
 
@@ -76,9 +81,7 @@ class Localizer(Node):
     def __init__(self):
         super().__init__("nav")
         self.declare_parameter('map', 'my_house.yaml')
-        self.declare_parameter('discrete_num_degrees', 360)
         self.map_file = self.get_parameter('map').get_parameter_value().string_value
-        self.discrete_num_degrees = self.get_parameter('discrete_num_degrees').get_parameter_value().integer_value
         with open(self.map_file, 'r') as map_file:
             map_properties = yaml.safe_load(map_file)
             image_filename = map_properties['image']
@@ -155,7 +158,7 @@ class Localizer(Node):
         lidar_msg1.ranges = ranges
         lidar_msg1.angle_min = 0.0
         lidar_msg1.angle_max = 6.28318548
-        lidar_msg1.angle_increment = 2 * np.pi / self.discrete_num_degrees
+        lidar_msg1.angle_increment = 2 * np.pi / 360
         lidar_msg1.time_increment = 0.00019850002718158066
         lidar_msg1.scan_time = 0.10004401206970215
         lidar_msg1.range_min = 0.019999999552965164
@@ -168,7 +171,6 @@ class Localizer(Node):
         points[:, 0] = particles[:, 1]*self.localizer.resolution + self.localizer.origin[0]
         points[:, 1] = (self.localizer.map_height-particles[:, 0])*self.localizer.resolution + self.localizer.origin[1]
         cloud_msg = point_cloud2.create_cloud_xyz32(header, points)
-        print(points)
         cloud_msg.header.frame_id = "map"
         self.particles_publisher.publish(cloud_msg)
 
