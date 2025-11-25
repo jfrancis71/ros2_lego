@@ -32,7 +32,7 @@ class MCL:
         self.num_particles = 150
         self.num_angles = 360  # Number of buckets in our angle quantization
         self.max_radius = 100  # Maximum radius in pixels that we make predictions over.
-        self.particles = np.transpose(np.array([ self.map_height*np.random.random(size=self.num_particles), self.map_width*np.random.random(size=self.num_particles) ]))
+        self.particles = np.transpose(np.array([ self.map_height*np.random.random(size=self.num_particles), self.map_width*np.random.random(size=self.num_particles), 2 * np.pi * np.random.random(size=self.num_particles) ]))
         height = self.num_angles
         k_radius = 100 / 100
         k_angle = height / (2 * np.pi)
@@ -51,30 +51,30 @@ class MCL:
 
     def predictions(self, map_image, particles):
         image = map_image==0
-        trans_coords = np.transpose(self.coord_map + self.particles, axes=(3,2,0,1))
+        trans_coords = np.transpose(self.coord_map + particles[:, :2], axes=(3,2,0,1))
         polar_coord_predictions = ndi.map_coordinates(image, trans_coords, prefilter=False, mode=self.ndi_mode, order=0, cval=0.0)
         skimage.transform._warps._clip_warp_output(image, polar_coord_predictions, 'constant', 0.0, True)
-        return polar_coord_predictions
+        polar_coords = np.argmax(polar_coord_predictions, axis=2)*self.resolution
+        predictions = np.array([ np.flip(np.roll(polar_coords[particle_id], -int(360 * self.particles[particle_id, 2] / (2 * np.pi)))) for particle_id in range(self.num_particles)])
+        return predictions
 
     def localize(self, scan):
         new_scan = skimage.transform.resize(scan.astype(np.float32), (self.num_angles,))
-        trans = self.predictions(self.map_image, self.particles)
-        polar_coords = np.argmax(trans, axis=2)*self.resolution
-        predictions = np.transpose(circulant(np.flip(polar_coords, axis=1)), axes=(0, 2, 1))
-        prediction_error = np.nanmean((predictions - new_scan)**2, axis=2)
+        predictions = self.predictions(self.map_image, self.particles)
+        prediction_error = np.nanmean((predictions - new_scan[np.newaxis, :])**2, axis=1)
         probs = np.exp(-prediction_error)
-        idx = np.unravel_index(np.argmin(prediction_error), prediction_error.shape)
-        loc = idx[0]
-        angle = 2 * np.pi * idx[1]/self.num_angles
-        x = self.particles[loc][1]*self.resolution + self.origin[0]
-        y = (self.map_height-self.particles[loc][0])*self.resolution + self.origin[1]
-        norm = probs.max(axis=1)
+        idx = np.argmin(prediction_error)
+        angle = self.particles[idx][2]
+        x = self.particles[idx][1]*self.resolution + self.origin[0]
+        y = (self.map_height-self.particles[idx][0])*self.resolution + self.origin[1]
+        norm = probs
         norm_1 = norm/norm.sum()
         print("publish...")
         ls = np.array(np.random.choice(np.arange(len(self.particles)), size=130, p=norm_1))
-        self.particles[:130] = self.particles[ls] + 1 * np.random.normal(size=(130, 2))
-        self.particles[130:] = np.transpose(np.array([ self.map_height*np.random.random(size=20), self.map_width*np.random.random(size=20) ]))
-        return (x, y), angle, predictions[loc][idx[1]]
+        self.particles[:130, :2] = self.particles[ls][:, :2] + 1 * np.random.normal(size=(130, 2))
+        self.particles[:130, 2] = self.particles[ls][:, 2] + .1 * np.random.normal(size=(130))
+        self.particles[130:] = np.transpose(np.array([ self.map_height*np.random.random(size=20), self.map_width*np.random.random(size=20), 2 * np.pi * np.random.random(size=20) ]))
+        return (x, y), angle, predictions[idx]
 
 
 class Localizer(Node):
