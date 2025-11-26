@@ -29,7 +29,8 @@ class MCL:
         self.resolution = resolution
         self.map_height = map_image.shape[0]
         self.map_width = map_image.shape[1]
-        self.num_particles = 150
+        self.num_particles = 500
+        self.replacement = 400
         self.num_angles = 360  # Number of buckets in our angle quantization
         self.max_radius = 100  # Maximum radius in pixels that we make predictions over.
         self.particles = np.transpose(np.array([ self.map_height*np.random.random(size=self.num_particles), self.map_width*np.random.random(size=self.num_particles), 2 * np.pi * np.random.random(size=self.num_particles) ]))
@@ -70,10 +71,11 @@ class MCL:
         norm = probs
         norm_1 = norm/norm.sum()
         print("publish...")
-        ls = np.array(np.random.choice(np.arange(len(self.particles)), size=130, p=norm_1))
-        self.particles[:130, :2] = self.particles[ls][:, :2] + 1 * np.random.normal(size=(130, 2))
-        self.particles[:130, 2] = self.particles[ls][:, 2] + .1 * np.random.normal(size=(130))
-        self.particles[130:] = np.transpose(np.array([ self.map_height*np.random.random(size=20), self.map_width*np.random.random(size=20), 2 * np.pi * np.random.random(size=20) ]))
+        ls = np.array(np.random.choice(np.arange(len(self.particles)), size=self.replacement, p=norm_1))
+        self.particles[:self.replacement, :2] = self.particles[ls][:, :2] + 1 * np.random.normal(size=(self.replacement, 2))
+        self.particles[:self.replacement, 2] = self.particles[ls][:, 2] + .1 * np.random.normal(size=(self.replacement))
+        new_particles = self.num_particles - self.replacement
+        self.particles[self.replacement:] = np.transpose(np.array([ self.map_height*np.random.random(size=new_particles), self.map_width*np.random.random(size=new_particles), 2 * np.pi * np.random.random(size=new_particles) ]))
         return (x, y), angle, predictions[idx]
 
 
