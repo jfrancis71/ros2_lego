@@ -22,6 +22,7 @@ from tf2_ros import TransformException
 from scipy import ndimage as ndi
 from skimage._shared.utils import _to_ndimage_mode
 from skimage._shared.utils import convert_to_float
+from scipy.stats import vonmises
 
 
 class MCL:
@@ -67,23 +68,30 @@ class MCL:
         prediction_error = np.nanmean((predictions - new_scan[np.newaxis, :])**2, axis=1)
         probs = np.exp(-prediction_error)
         probs = probs/probs.sum()
-        x_c = np.nansum(probs * self.particles[:, 1])
-        y_c = np.nansum(probs * self.particles[:, 0])
-        angle = np.nansum(probs * self.particles[:, 2])
-        x_std_c = np.sqrt(np.nansum(probs * self.particles[:, 1]**2) - x_c**2)
-        y_std_c = np.sqrt(np.nansum(probs * self.particles[:, 0]**2) - y_c**2)
-        angle_std_c = np.sqrt(np.nansum(probs * self.particles[:, 2]**2) - angle**2)
-        x_w = x_c*self.resolution + self.origin[0]
-        y_w = (self.map_height-y_c)*self.resolution + self.origin[1]
-        x_std_w = x_std_c*self.resolution
-        y_std_w = y_std_c*self.resolution
         print("publish...")
-        mean_predictions = self.predictions(self.map_image, np.array([[y_c, x_c, angle]]))[0]
         ls = np.array(np.random.choice(np.arange(len(self.particles)), size=self.replacement, p=probs))
         self.particles[:self.replacement, :2] = self.particles[ls][:, :2] + 1 * np.random.normal(size=(self.replacement, 2))
         self.particles[:self.replacement, 2] = self.particles[ls][:, 2] + .1 * np.random.normal(size=(self.replacement))
         new_particles = self.num_particles - self.replacement
         self.particles[self.replacement:] = np.transpose(np.array([ self.map_height*np.random.random(size=new_particles), self.map_width*np.random.random(size=new_particles), 2 * np.pi * np.random.random(size=new_particles) ]))
+
+        x_c = np.nanmean(self.particles[:self.replacement, 1])
+        y_c = np.nanmean(self.particles[:self.replacement, 0])
+#        angle = np.nanmean(self.particles[:self.replacement, 2])
+        x_std_c = np.sqrt(np.nanmean(self.particles[:self.replacement, 1]**2) - x_c**2)
+        y_std_c = np.sqrt(np.nanmean(self.particles[:self.replacement, 0]**2) - y_c**2)
+#        angle_std_c = np.sqrt(np.nanmean(self.particles[:self.replacement, 2]**2) - angle**2)
+        kappa, angle, _ = vonmises.fit(self.particles[:self.replacement, 2], fscale=1)
+        angle_std_c = 1/np.sqrt(kappa)
+        mean_predictions = self.predictions(self.map_image, np.array([[y_c, x_c, angle]]))[0]
+        x_w = x_c*self.resolution + self.origin[0]
+        y_w = (self.map_height-y_c)*self.resolution + self.origin[1]
+        x_std_w = x_std_c*self.resolution
+        y_std_w = y_std_c*self.resolution
+
+        mean_predictions = self.predictions(self.map_image, np.array([[y_c, x_c, angle]]))[0]
+
+        print("ANGLE=", angle, " A STD=", angle_std_c)
         return (x_w, y_w), angle, x_std_w, y_std_w, angle_std_c, mean_predictions
 
 
@@ -227,12 +235,13 @@ class Localizer(Node):
         marker.color.g = 0.0
         marker.color.b = 1.0
         marker.color.a = 1.0
+        mstd_angle = np.min((std_angle, np.pi))
         point1 = Point()
         point1.x, point1.y, point1.z = loc[0], loc[1], 0.1
         point2 = Point()
-        point2.x, point2.y, point2.z = loc[0] + .5*np.sin(angle-std_angle), loc[1] + .5*np.cos(angle-std_angle), 0.1
+        point2.x, point2.y, point2.z = loc[0] + .5*np.sin(angle-mstd_angle), loc[1] + .5*np.cos(angle-mstd_angle), 0.1
         point3 = Point()
-        point3.x, point3.y, point3.z = loc[0] + .5*np.sin(angle+std_angle), loc[1] + .5*np.cos(angle+std_angle), 0.1
+        point3.x, point3.y, point3.z = loc[0] + .5*np.sin(angle+mstd_angle), loc[1] + .5*np.cos(angle+mstd_angle), 0.1
         marker.points = [point1, point2, point1, point3]
         self.line_publisher.publish(marker)
 
