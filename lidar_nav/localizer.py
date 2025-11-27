@@ -12,6 +12,7 @@ from sensor_msgs.msg import LaserScan
 from sensor_msgs.msg import PointCloud2
 from sensor_msgs_py import point_cloud2
 from visualization_msgs.msg import Marker
+from geometry_msgs.msg import Point
 from geometry_msgs.msg import TransformStamped
 from tf2_ros import TransformBroadcaster
 from tf_transformations import quaternion_from_euler
@@ -68,9 +69,10 @@ class MCL:
         probs = probs/probs.sum()
         x_c = np.nansum(probs * self.particles[:, 1])
         y_c = np.nansum(probs * self.particles[:, 0])
+        angle = np.nansum(probs * self.particles[:, 2])
         x_std_c = np.sqrt(np.nansum(probs * self.particles[:, 1]**2) - x_c**2)
         y_std_c = np.sqrt(np.nansum(probs * self.particles[:, 0]**2) - y_c**2)
-        angle = np.nansum(probs * self.particles[:, 2])
+        angle_std_c = np.sqrt(np.nansum(probs * self.particles[:, 2]**2) - angle**2)
         x_w = x_c*self.resolution + self.origin[0]
         y_w = (self.map_height-y_c)*self.resolution + self.origin[1]
         x_std_w = x_std_c*self.resolution
@@ -82,7 +84,7 @@ class MCL:
         self.particles[:self.replacement, 2] = self.particles[ls][:, 2] + .1 * np.random.normal(size=(self.replacement))
         new_particles = self.num_particles - self.replacement
         self.particles[self.replacement:] = np.transpose(np.array([ self.map_height*np.random.random(size=new_particles), self.map_width*np.random.random(size=new_particles), 2 * np.pi * np.random.random(size=new_particles) ]))
-        return (x_w, y_w), angle, x_std_w, y_std_w, mean_predictions
+        return (x_w, y_w), angle, x_std_w, y_std_w, angle_std_c, mean_predictions
 
 
 class Localizer(Node):
@@ -105,6 +107,9 @@ class Localizer(Node):
         self.particles_publisher = \
             self.create_publisher(PointCloud2, "/particles", 1)
         self.marker_publisher = self.create_publisher(Marker, 'visualization_marker', 1)
+        self.line_publisher = self.create_publisher(Marker, 'visualization_marker2', 1)
+        self.publisher_ = self.create_publisher(Marker, 'visualization_marker3', 1)
+
         self.tf_buffer = Buffer()
         self.tf_listener = TransformListener(self.tf_buffer, self)
         self.tf_broadcaster = TransformBroadcaster(self)
@@ -191,8 +196,6 @@ class Localizer(Node):
         marker.id = 0
         marker.type = 3  # CYLINDER
         marker.action = 0  # ADD
-
-        # Pose
         marker.pose.position.x = loc[0]
         marker.pose.position.y = loc[1]
         marker.pose.position.z = 0.0
@@ -200,27 +203,47 @@ class Localizer(Node):
         marker.pose.orientation.y = 0.0
         marker.pose.orientation.z = 0.0
         marker.pose.orientation.w = 1.0
-
-        # Scale
-        marker.scale.x = std_x  # Diameter
-        marker.scale.y = std_y  # Diameter
-        marker.scale.z = 0.5  # Height
-
-        # Color
+        marker.scale.x = std_x
+        marker.scale.y = std_y
+        marker.scale.z = 0.5
         marker.color.r = 0.0
         marker.color.g = 0.0
         marker.color.b = 1.0
         marker.color.a = .2
-
         self.marker_publisher.publish(marker)
+
+    def publish_line(self, header, loc, angle, std_angle):
+        marker = Marker()
+        marker.header = header
+        marker.ns = "basic"
+        marker.id = 0
+        marker.type = Marker.LINE_LIST
+        marker.action = Marker.ADD
+
+        marker.scale.x = .1
+        marker.scale.y = .1
+        marker.scale.z = .1
+        marker.color.r = 0.0
+        marker.color.g = 0.0
+        marker.color.b = 1.0
+        marker.color.a = 1.0
+        point1 = Point()
+        point1.x, point1.y, point1.z = loc[0], loc[1], 0.1
+        point2 = Point()
+        point2.x, point2.y, point2.z = loc[0] + .5*np.sin(angle-std_angle), loc[1] + .5*np.cos(angle-std_angle), 0.1
+        point3 = Point()
+        point3.x, point3.y, point3.z = loc[0] + .5*np.sin(angle+std_angle), loc[1] + .5*np.cos(angle+std_angle), 0.1
+        marker.points = [point1, point2, point1, point3]
+        self.line_publisher.publish(marker)
 
     def lidar_callback(self, lidar_msg):
         scan = np.array(lidar_msg.ranges)
-        loc, angle, std_x, std_y, predictions = self.localizer.localize(scan)
+        loc, angle, std_x, std_y, std_angle, predictions = self.localizer.localize(scan)
         self.send_map_base_link_transform(loc, angle, None)
         self.publish_lidar_prediction(lidar_msg.header, predictions)
         self.publish_point_cloud(lidar_msg.header, self.localizer.particles)
         self.publish_marker(lidar_msg.header, loc, angle, std_x, std_y)
+        self.publish_line(lidar_msg.header, loc, angle, std_angle)
 
 
 rclpy.init()
