@@ -124,15 +124,7 @@ class Localizer(Node):
         map = skimage.io.imread(os.path.join(os.path.split(self.map_file)[0], image_filename))
         self.localizer = MCL(map, origin, resolution)
 
-    def send_map_base_link_transform(self, loc, angle, tim):
-        try:
-            base_link_to_odom_transform = self.tf_buffer.lookup_transform(
-                "base_link",
-                "odom",
-                rclpy.time.Time())
-        except TransformException as ex:
-            print("No Transform")
-            return
+    def send_map_base_link_transform(self, base_link_to_odom_transform, loc, angle, tim):
         try:
             base_laser_to_base_link_transform = self.tf_buffer.lookup_transform(
                 "base_laser",
@@ -247,8 +239,16 @@ class Localizer(Node):
 
     def lidar_callback(self, lidar_msg):
         scan = np.array(lidar_msg.ranges)
+        try:
+            base_link_to_odom_transform = self.tf_buffer.lookup_transform(
+                "base_link",
+                "odom",
+                rclpy.time.Time())
+        except TransformException as ex:
+            print("No Transform")
+            return
         loc, angle, std_x, std_y, std_angle, predictions = self.localizer.localize(scan)
-        self.send_map_base_link_transform(loc, angle, None)
+        self.send_map_base_link_transform(base_link_to_odom_transform, loc, angle, None)
         self.publish_lidar_prediction(lidar_msg.header, predictions)
         self.publish_point_cloud(lidar_msg.header, self.localizer.particles)
         self.publish_marker(lidar_msg.header, loc, angle, std_x, std_y)
