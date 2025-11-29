@@ -16,6 +16,7 @@ from geometry_msgs.msg import Point
 from geometry_msgs.msg import TransformStamped
 from tf2_ros import TransformBroadcaster
 from tf_transformations import quaternion_from_euler
+from tf_transformations import euler_from_quaternion
 from tf2_ros.buffer import Buffer
 from tf2_ros.transform_listener import TransformListener
 from tf2_ros import TransformException
@@ -37,6 +38,7 @@ class MCL:
         self.num_angles = 360  # Number of buckets in our angle quantization
         self.max_radius = 100  # Maximum radius in pixels that we make predictions over.
         self.particles = np.transpose(np.array([ self.map_height*np.random.random(size=self.num_particles), self.map_width*np.random.random(size=self.num_particles), 2 * np.pi * np.random.random(size=self.num_particles) ]))
+        # Particles are row, col, theta (theta is ROS2 convention)
         height = self.num_angles
         k_radius = 100 / 100
         k_angle = height / (2 * np.pi)
@@ -53,17 +55,39 @@ class MCL:
         self.coord_map = np.transpose(c, axes=(1, 2, 0))[:, :, np.newaxis, :]
         self.ndi_mode = _to_ndimage_mode('constant')
 
+    def update_particles(self, old_transform, new_transform):
+        #parallel only, wont work for holonomic robot
+        r = old_transform.transform.rotation
+        rot = [r.x, r.y, r.z, r.w]
+        _, _, odom_angle = euler_from_quaternion(rot)
+        parallel_x = np.cos(odom_angle)
+        parallel_y = np.sin(odom_angle)
+        diff_x = new_transform.transform.translation.x - old_transform.transform.translation.x
+        diff_y = new_transform.transform.translation.y - old_transform.transform.translation.y
+        odom_diff = np.array([diff_x , diff_y])
+        parallel = np.dot(np.array([parallel_x, parallel_y]), odom_diff)
+        print("parallel=", parallel, odom_angle, diff_x, diff_y)
+        self.particles[:, 1] += parallel * np.cos(self.particles[:,2])/self.resolution
+        self.particles[:, 0] -= parallel * np.sin(self.particles[:,2])/self.resolution
+        new_r = new_transform.transform.rotation
+        new_rot = [new_r.x, new_r.y, new_r.z, new_r.w]
+        _, _, new_odom_angle = euler_from_quaternion(new_rot)
+        diff_rot = new_odom_angle - odom_angle  # is this valid?
+        self.particles[:, 2] += diff_rot
+
+
     def predictions(self, map_image, particles):
         image = map_image==0
         trans_coords = np.transpose(self.coord_map + particles[:, :2], axes=(3,2,0,1))
         polar_coord_predictions = ndi.map_coordinates(image, trans_coords, prefilter=False, mode=self.ndi_mode, order=0, cval=0.0)
         skimage.transform._warps._clip_warp_output(image, polar_coord_predictions, 'constant', 0.0, True)
         polar_coords = np.argmax(polar_coord_predictions, axis=2)*self.resolution
-        predictions = np.array([ np.flip(np.roll(polar_coords[particle_id], -int(360 * self.particles[particle_id, 2] / (2 * np.pi)))) for particle_id in range(len(particles))])
+        predictions = np.array([ np.flip(np.roll(polar_coords[particle_id], int(360 * self.particles[particle_id, 2] / (2 * np.pi)))) for particle_id in range(len(particles))])
         return predictions
 
     def localize(self, scan):
         new_scan = skimage.transform.resize(scan.astype(np.float32), (self.num_angles,))
+        new_scan = np.roll(new_scan, -90)  # account for laser mounting.
         predictions = self.predictions(self.map_image, self.particles)
         prediction_error = np.nanmean((predictions - new_scan[np.newaxis, :])**2, axis=1)
         probs = np.exp(-prediction_error)
@@ -123,6 +147,7 @@ class Localizer(Node):
         self.tf_broadcaster = TransformBroadcaster(self)
         map = skimage.io.imread(os.path.join(os.path.split(self.map_file)[0], image_filename))
         self.localizer = MCL(map, origin, resolution)
+        self.old_transform = None
 
     def send_map_base_link_transform(self, base_link_to_odom_transform, loc, angle, tim):
         try:
@@ -140,36 +165,27 @@ class Localizer(Node):
         zero_to_odom_transform.transform = base_link_to_odom_transform.transform
         self.tf_broadcaster.sendTransform(zero_to_odom_transform)
 
-        map_base_laser_to_zero_transform = TransformStamped()
-        map_base_laser_to_zero_transform.header.stamp = \
+        map_to_zero_transform = TransformStamped()
+        map_to_zero_transform.header.stamp = \
             self.get_clock().now().to_msg()
-        map_base_laser_to_zero_transform.header.frame_id = 'map_base_laser'
-        map_base_laser_to_zero_transform.child_frame_id = 'zero'
-        map_base_laser_to_zero_transform.transform = \
-            base_laser_to_base_link_transform.transform
-        self.tf_broadcaster.sendTransform(map_base_laser_to_zero_transform)
-
-        map_to_map_base_laser_transform = TransformStamped()
-        map_to_map_base_laser_transform.header.stamp = \
-            self.get_clock().now().to_msg()
-        map_to_map_base_laser_transform.header.frame_id = 'map'
-        map_to_map_base_laser_transform.child_frame_id = 'map_base_laser'
-        map_to_map_base_laser_transform.transform.translation.x = \
+        map_to_zero_transform.header.frame_id = 'map'
+        map_to_zero_transform.child_frame_id = 'zero'
+        map_to_zero_transform.transform.translation.x = \
             loc[0]
-        map_to_map_base_laser_transform.transform.translation.y = \
+        map_to_zero_transform.transform.translation.y = \
             loc[1]
-        map_to_map_base_laser_transform.transform.translation.z = 0.0
-        q = quaternion_from_euler(0, 0, -angle)
-        map_to_map_base_laser_transform.transform.rotation.x = q[0]
-        map_to_map_base_laser_transform.transform.rotation.y = q[1]
-        map_to_map_base_laser_transform.transform.rotation.z = q[2]
-        map_to_map_base_laser_transform.transform.rotation.w = q[3]
-        self.tf_broadcaster.sendTransform(map_to_map_base_laser_transform)
+        map_to_zero_transform.transform.translation.z = 0.0
+        q = quaternion_from_euler(0, 0, angle)
+        map_to_zero_transform.transform.rotation.x = q[0]
+        map_to_zero_transform.transform.rotation.y = q[1]
+        map_to_zero_transform.transform.rotation.z = q[2]
+        map_to_zero_transform.transform.rotation.w = q[3]
+        self.tf_broadcaster.sendTransform(map_to_zero_transform)
 
 
     def publish_lidar_prediction(self, header, ranges):
         lidar_msg1 = LaserScan()
-        lidar_msg1.ranges = ranges
+        lidar_msg1.ranges = np.roll(ranges, 90)  # Account for laser mounting
         lidar_msg1.angle_min = 0.0
         lidar_msg1.angle_max = 6.28318548
         lidar_msg1.angle_increment = 2 * np.pi / 360
@@ -231,9 +247,9 @@ class Localizer(Node):
         point1 = Point()
         point1.x, point1.y, point1.z = loc[0], loc[1], 0.1
         point2 = Point()
-        point2.x, point2.y, point2.z = loc[0] + .5*np.sin(angle-mstd_angle), loc[1] + .5*np.cos(angle-mstd_angle), 0.1
+        point2.x, point2.y, point2.z = loc[0] + .5*np.cos(angle-mstd_angle), loc[1] + .5*np.sin(angle-mstd_angle), 0.1
         point3 = Point()
-        point3.x, point3.y, point3.z = loc[0] + .5*np.sin(angle+mstd_angle), loc[1] + .5*np.cos(angle+mstd_angle), 0.1
+        point3.x, point3.y, point3.z = loc[0] + .5*np.cos(angle+mstd_angle), loc[1] + .5*np.sin(angle+mstd_angle), 0.1
         marker.points = [point1, point2, point1, point3]
         self.line_publisher.publish(marker)
 
@@ -247,12 +263,24 @@ class Localizer(Node):
         except TransformException as ex:
             print("No Transform")
             return
+        try:
+            odom_to_base_link_transform = self.tf_buffer.lookup_transform(
+                "odom",
+                "base_link",
+                rclpy.time.Time())
+        except TransformException as ex:
+            print("No Transform")
+            return
         loc, angle, std_x, std_y, std_angle, predictions = self.localizer.localize(scan)
+        if self.old_transform is None:
+            self.old_transform = odom_to_base_link_transform
+        self.localizer.update_particles(self.old_transform, odom_to_base_link_transform)
         self.send_map_base_link_transform(base_link_to_odom_transform, loc, angle, None)
         self.publish_lidar_prediction(lidar_msg.header, predictions)
         self.publish_point_cloud(lidar_msg.header, self.localizer.particles)
         self.publish_marker(lidar_msg.header, loc, angle, std_x, std_y)
         self.publish_line(lidar_msg.header, loc, angle, std_angle)
+        self.old_transform = odom_to_base_link_transform
 
 
 rclpy.init()
