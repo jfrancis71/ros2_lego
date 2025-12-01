@@ -8,6 +8,7 @@ import numpy as np
 from scipy.linalg import circulant
 import rclpy
 from rclpy.node import Node
+from std_msgs.msg import Header 
 from sensor_msgs.msg import LaserScan
 from sensor_msgs.msg import PointCloud2
 from sensor_msgs_py import point_cloud2
@@ -200,14 +201,17 @@ class Localizer(Node):
         points = np.zeros([particles.shape[0], 3])
         points[:, 0] = particles[:, 1]*self.localizer.resolution + self.localizer.origin[0]
         points[:, 1] = (self.localizer.map_height-particles[:, 0])*self.localizer.resolution + self.localizer.origin[1]
-        cloud_msg = point_cloud2.create_cloud_xyz32(header, points)
-        cloud_msg.header.frame_id = "map"
+        cloud_msg_header = Header()
+        cloud_msg_header.stamp = header.stamp
+        cloud_msg_header.frame_id = "map"
+        cloud_msg = point_cloud2.create_cloud_xyz32(cloud_msg_header, points)
         self.particles_publisher.publish(cloud_msg)
 
     def publish_marker(self, header, loc, angle, std_x, std_y):
         print("LOC=", std_x)
         marker = Marker()
-        marker.header = header
+        marker.header.stamp = header.stamp
+        marker.header.frame_id = "map"
         marker.ns = "basic_shapes"
         marker.id = 0
         marker.type = 3  # CYLINDER
@@ -230,7 +234,8 @@ class Localizer(Node):
 
     def publish_line(self, header, loc, angle, std_angle):
         marker = Marker()
-        marker.header = header
+        marker.header.stamp = header.stamp
+        marker.header.frame_id = "map"
         marker.ns = "basic"
         marker.id = 0
         marker.type = Marker.LINE_LIST
