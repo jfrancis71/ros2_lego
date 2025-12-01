@@ -211,13 +211,13 @@ class Localizer(Node):
         print("LOC=", std_x)
         marker = Marker()
         marker.header.stamp = header.stamp
-        marker.header.frame_id = "map"
+        marker.header.frame_id = "base_link"
         marker.ns = "basic_shapes"
         marker.id = 0
         marker.type = 3  # CYLINDER
         marker.action = 0  # ADD
-        marker.pose.position.x = loc[0]
-        marker.pose.position.y = loc[1]
+        marker.pose.position.x = 0.0
+        marker.pose.position.y = 0.0
         marker.pose.position.z = 0.0
         marker.pose.orientation.x = 0.0
         marker.pose.orientation.y = 0.0
@@ -235,7 +235,7 @@ class Localizer(Node):
     def publish_line(self, header, loc, angle, std_angle):
         marker = Marker()
         marker.header.stamp = header.stamp
-        marker.header.frame_id = "map"
+        marker.header.frame_id = "base_link"
         marker.ns = "basic"
         marker.id = 0
         marker.type = Marker.LINE_LIST
@@ -250,11 +250,11 @@ class Localizer(Node):
         marker.color.a = 1.0
         mstd_angle = np.min((std_angle, np.pi))
         point1 = Point()
-        point1.x, point1.y, point1.z = loc[0], loc[1], 0.1
+        point1.x, point1.y, point1.z = 0.0, 0.0, 0.1
         point2 = Point()
-        point2.x, point2.y, point2.z = loc[0] + .5*np.cos(angle-mstd_angle), loc[1] + .5*np.sin(angle-mstd_angle), 0.1
+        point2.x, point2.y, point2.z = 0.0 + .5*np.cos(-mstd_angle), 0.0 + .5*np.sin(-mstd_angle), 0.1
         point3 = Point()
-        point3.x, point3.y, point3.z = loc[0] + .5*np.cos(angle+mstd_angle), loc[1] + .5*np.sin(angle+mstd_angle), 0.1
+        point3.x, point3.y, point3.z = 0.0 + .5*np.cos(+mstd_angle), 0.0 + .5*np.sin(+mstd_angle), 0.1
         marker.points = [point1, point2, point1, point3]
         self.line_publisher.publish(marker)
 
