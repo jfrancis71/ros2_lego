@@ -139,10 +139,8 @@ class Localizer(Node):
             self.create_publisher(LaserScan, "/pred_laser", 1)
         self.particles_publisher = \
             self.create_publisher(PointCloud2, "/particles", 1)
-        self.marker_publisher = self.create_publisher(Marker, 'visualization_marker', 1)
-        self.line_publisher = self.create_publisher(Marker, 'visualization_marker2', 1)
-        self.publisher_ = self.create_publisher(Marker, 'visualization_marker3', 1)
-
+        self.marker_loc_uncertainty_publisher = self.create_publisher(Marker, 'loc_uncertainty', 1)
+        self.angle_uncertainty_publisher = self.create_publisher(Marker, 'angle_uncertainty', 1)
         self.tf_buffer = Buffer()
         self.tf_listener = TransformListener(self.tf_buffer, self)
         self.tf_broadcaster = TransformBroadcaster(self)
@@ -207,7 +205,7 @@ class Localizer(Node):
         cloud_msg = point_cloud2.create_cloud_xyz32(cloud_msg_header, points)
         self.particles_publisher.publish(cloud_msg)
 
-    def publish_marker(self, header, loc, angle, std_x, std_y):
+    def publish_loc_uncertainty_marker(self, header, loc, angle, std_x, std_y):
         print("LOC=", std_x)
         marker = Marker()
         marker.header.stamp = header.stamp
@@ -230,9 +228,9 @@ class Localizer(Node):
         marker.color.g = 0.0
         marker.color.b = 1.0
         marker.color.a = .2
-        self.marker_publisher.publish(marker)
+        self.marker_loc_uncertainty_publisher.publish(marker)
 
-    def publish_line(self, header, loc, angle, std_angle):
+    def publish_angle_uncertainty_marker(self, header, loc, angle, std_angle):
         marker = Marker()
         marker.header.stamp = header.stamp
         marker.header.frame_id = "base_link"
@@ -256,7 +254,7 @@ class Localizer(Node):
         point3 = Point()
         point3.x, point3.y, point3.z = 0.0 + .5*np.cos(+mstd_angle), 0.0 + .5*np.sin(+mstd_angle), 0.1
         marker.points = [point1, point2, point1, point3]
-        self.line_publisher.publish(marker)
+        self.angle_uncertainty_publisher.publish(marker)
 
     def lidar_callback(self, lidar_msg):
         scan = np.array(lidar_msg.ranges)
@@ -283,8 +281,8 @@ class Localizer(Node):
         self.send_map_base_link_transform(base_link_to_odom_transform, loc, angle, None)
         self.publish_lidar_prediction(lidar_msg.header, predictions)
         self.publish_point_cloud(lidar_msg.header, self.localizer.particles)
-        self.publish_marker(lidar_msg.header, loc, angle, std_x, std_y)
-        self.publish_line(lidar_msg.header, loc, angle, std_angle)
+        self.publish_loc_uncertainty_marker(lidar_msg.header, loc, angle, std_x, std_y)
+        self.publish_angle_uncertainty_marker(lidar_msg.header, loc, angle, std_angle)
         self.old_transform = odom_to_base_link_transform
 
 
