@@ -24,6 +24,9 @@ from tf_transformations import quaternion_from_euler
 from tf_transformations import euler_from_quaternion
 from tf2_ros.buffer import Buffer
 from tf2_ros.transform_listener import TransformListener
+from rclpy.qos import QoSProfile
+from rclpy.qos import DurabilityPolicy
+from rclpy.qos import HistoryPolicy
 from tf2_ros import TransformException
 from scipy import ndimage as ndi
 from skimage._shared.utils import _to_ndimage_mode
@@ -146,7 +149,12 @@ class Localizer(Node):
         self.marker_loc_uncertainty_publisher = self.create_publisher(Marker, 'loc_uncertainty', 1)
         self.angle_uncertainty_publisher = self.create_publisher(Marker, 'angle_uncertainty', 1)
         self.tf_buffer = Buffer()
-        self.tf_listener = TransformListener(self.tf_buffer, self)
+        qos = QoSProfile(
+            depth=1,
+            durability=DurabilityPolicy.VOLATILE,
+            history=HistoryPolicy.KEEP_LAST,
+            )
+        self.tf_listener = TransformListener(self.tf_buffer, self, spin_thread=True, qos=qos)
         self.tf_broadcaster = TransformBroadcaster(self)
         map = skimage.io.imread(os.path.join(os.path.split(self.map_file)[0], image_filename))
         self.localizer = MCL(map, origin, resolution)
