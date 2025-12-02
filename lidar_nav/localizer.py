@@ -16,6 +16,10 @@ from visualization_msgs.msg import Marker
 from geometry_msgs.msg import Point
 from geometry_msgs.msg import TransformStamped
 from tf2_ros import TransformBroadcaster
+# Current StaticTransformBroadcaster is broken, we need to use from rolling.
+# clone git clone https://github.com/ros2/geometry2.git
+# Prepend ./src/geometry2/tf2_ros_py/tf2_ros to PYTHONPATH and export
+from static_transform_broadcaster import StaticTransformBroadcaster
 from tf_transformations import quaternion_from_euler
 from tf_transformations import euler_from_quaternion
 from tf2_ros.buffer import Buffer
@@ -147,6 +151,7 @@ class Localizer(Node):
         map = skimage.io.imread(os.path.join(os.path.split(self.map_file)[0], image_filename))
         self.localizer = MCL(map, origin, resolution)
         self.old_transform = None
+        self.tf_static_broadcaster = StaticTransformBroadcaster(self)
 
     def send_map_base_link_transform(self, base_link_to_odom_transform, loc, angle, tim):
         try:
@@ -162,7 +167,7 @@ class Localizer(Node):
         zero_to_odom_transform.header.frame_id = 'zero'
         zero_to_odom_transform.child_frame_id = 'odom'
         zero_to_odom_transform.transform = base_link_to_odom_transform.transform
-        self.tf_broadcaster.sendTransform(zero_to_odom_transform)
+        self.tf_static_broadcaster.sendTransform(zero_to_odom_transform)
 
         map_to_zero_transform = TransformStamped()
         map_to_zero_transform.header.stamp = \
@@ -179,7 +184,7 @@ class Localizer(Node):
         map_to_zero_transform.transform.rotation.y = q[1]
         map_to_zero_transform.transform.rotation.z = q[2]
         map_to_zero_transform.transform.rotation.w = q[3]
-        self.tf_broadcaster.sendTransform(map_to_zero_transform)
+        self.tf_static_broadcaster.sendTransform(map_to_zero_transform)
 
 
     def publish_lidar_prediction(self, header, ranges):
