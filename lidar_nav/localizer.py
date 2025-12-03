@@ -64,7 +64,7 @@ class MCL:
         self.coord_map = np.transpose(c, axes=(1, 2, 0))[:, :, np.newaxis, :]
         self.ndi_mode = _to_ndimage_mode('constant')
 
-    def update_particles(self, old_transform, new_transform):
+    def update_motion_particles(self, old_transform, new_transform):
         #parallel only, wont work for holonomic robot
         r = old_transform.transform.rotation
         rot = [r.x, r.y, r.z, r.w]
@@ -84,7 +84,6 @@ class MCL:
         diff_rot = new_odom_angle - odom_angle  # is this valid?
         self.particles[:, 2] += diff_rot
 
-
     def predictions(self, map_image, particles):
         image = map_image==0
         trans_coords = np.transpose(self.coord_map + particles[:, :2], axes=(3,2,0,1))
@@ -94,6 +93,13 @@ class MCL:
         predictions = np.array([ np.flip(np.roll(polar_coords[particle_id], int(360 * self.particles[particle_id, 2] / (2 * np.pi)))) for particle_id in range(len(particles))])
         return predictions
 
+    def resample_particles(self, probs):
+        ls = np.array(np.random.choice(np.arange(len(self.particles)), size=self.replacement, p=probs))
+        self.particles[:self.replacement, :2] = self.particles[ls][:, :2] + 1 * np.random.normal(size=(self.replacement, 2))
+        self.particles[:self.replacement, 2] = self.particles[ls][:, 2] + .1 * np.random.normal(size=(self.replacement))
+        new_particles = self.num_particles - self.replacement
+        self.particles[self.replacement:] = np.transpose(np.array([ self.map_height*np.random.random(size=new_particles), self.map_width*np.random.random(size=new_particles), 2 * np.pi * np.random.random(size=new_particles) ]))
+
     def localize(self, scan):
         new_scan = skimage.transform.resize(scan.astype(np.float32), (self.num_angles,))
         new_scan = np.roll(new_scan, -90)  # account for laser mounting.
@@ -102,18 +108,12 @@ class MCL:
         probs = np.exp(-prediction_error)
         probs = probs/probs.sum()
         print("publish...")
-        ls = np.array(np.random.choice(np.arange(len(self.particles)), size=self.replacement, p=probs))
-        self.particles[:self.replacement, :2] = self.particles[ls][:, :2] + 1 * np.random.normal(size=(self.replacement, 2))
-        self.particles[:self.replacement, 2] = self.particles[ls][:, 2] + .1 * np.random.normal(size=(self.replacement))
-        new_particles = self.num_particles - self.replacement
-        self.particles[self.replacement:] = np.transpose(np.array([ self.map_height*np.random.random(size=new_particles), self.map_width*np.random.random(size=new_particles), 2 * np.pi * np.random.random(size=new_particles) ]))
+        self.resample_particles(probs)
 
         x_c = np.nanmean(self.particles[:self.replacement, 1])
         y_c = np.nanmean(self.particles[:self.replacement, 0])
-#        angle = np.nanmean(self.particles[:self.replacement, 2])
         x_std_c = np.sqrt(np.nanmean(self.particles[:self.replacement, 1]**2) - x_c**2)
         y_std_c = np.sqrt(np.nanmean(self.particles[:self.replacement, 0]**2) - y_c**2)
-#        angle_std_c = np.sqrt(np.nanmean(self.particles[:self.replacement, 2]**2) - angle**2)
         kappa, angle, _ = vonmises.fit(self.particles[:self.replacement, 2], fscale=1)
         angle_std_c = 1/np.sqrt(kappa)
         mean_predictions = self.predictions(self.map_image, np.array([[y_c, x_c, angle]]))[0]
@@ -297,7 +297,7 @@ class Localizer(Node):
         loc, angle, std_x, std_y, std_angle, predictions = self.localizer.localize(scan)
         if self.old_transform is None:
             self.old_transform = odom_to_base_link_transform
-        self.localizer.update_particles(self.old_transform, odom_to_base_link_transform)
+        self.localizer.update_motion_particles(self.old_transform, odom_to_base_link_transform)
         self.send_map_base_link_transform(base_link_to_odom_transform, loc, angle, None)
         self.publish_lidar_prediction(lidar_msg.header, predictions)
         self.publish_point_cloud(lidar_msg.header, self.localizer.particles)
