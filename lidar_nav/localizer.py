@@ -210,9 +210,9 @@ class Localizer(Node):
         self.pred_publisher.publish(lidar_msg1)
 
     def publish_point_cloud(self, header, particles):
-        points = np.zeros([particles.shape[0], 3])
-        points[:, 0] = particles[:, 1]*self.localizer.resolution + self.localizer.origin[0]
-        points[:, 1] = (self.localizer.map_height-particles[:, 0])*self.localizer.resolution + self.localizer.origin[1]
+        points = np.zeros([self.localizer.replacement, 3])
+        points[:, 0] = particles[:self.localizer.replacement, 1]*self.localizer.resolution + self.localizer.origin[0]
+        points[:, 1] = (self.localizer.map_height-particles[:self.localizer.replacement, 0])*self.localizer.resolution + self.localizer.origin[1]
         cloud_msg_header = Header()
         cloud_msg_header.stamp = header.stamp
         cloud_msg_header.frame_id = "map"
