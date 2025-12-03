@@ -291,7 +291,8 @@ class Localizer(Node):
         lidar_msg_time = Time.from_msg(lidar_msg.header.stamp)
         odom_base_tf_time = Time.from_msg(odom_to_base_link_transform.header.stamp)
         delay = (lidar_msg_time-odom_base_tf_time).nanoseconds*1e-9
-        if delay > .05:
+        if delay > .1:
+            print("DELAY ", delay)
             return
         loc, angle, std_x, std_y, std_angle, predictions = self.localizer.localize(scan)
         if self.old_transform is None:
