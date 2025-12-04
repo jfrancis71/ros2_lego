@@ -242,6 +242,7 @@ class Localizer(Node):
         marker.color.g = 0.0
         marker.color.b = 1.0
         marker.color.a = .2
+        marker.frame_locked = True
         self.marker_loc_uncertainty_publisher.publish(marker)
 
     def publish_angle_uncertainty_marker(self, header, loc, angle, std_angle):
@@ -268,6 +269,7 @@ class Localizer(Node):
         point3 = Point()
         point3.x, point3.y, point3.z = 0.0 + .5*np.cos(+mstd_angle), 0.0 + .5*np.sin(+mstd_angle), 0.1
         marker.points = [point1, point2, point1, point3]
+        marker.frame_locked = True
         self.angle_uncertainty_publisher.publish(marker)
 
     def lidar_callback(self, lidar_msg):
