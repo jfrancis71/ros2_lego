@@ -290,16 +290,18 @@ class Localizer(Node):
         except TransformException as ex:
             print("No Transform")
             return
+        if self.old_transform is None:
+            self.old_transform = odom_to_base_link_transform
         lidar_msg_time = Time.from_msg(lidar_msg.header.stamp)
         odom_base_tf_time = Time.from_msg(odom_to_base_link_transform.header.stamp)
         delay = (lidar_msg_time-odom_base_tf_time).nanoseconds*1e-9
         if delay > .1:
             print("DELAY ", delay)
             return
+        self.localizer.update_motion_particles(self.old_transform, odom_to_base_link_transform)
         loc, angle, std_x, std_y, std_angle, predictions = self.localizer.localize(scan)
         if self.old_transform is None:
             self.old_transform = odom_to_base_link_transform
-        self.localizer.update_motion_particles(self.old_transform, odom_to_base_link_transform)
         self.send_map_base_link_transform(base_link_to_odom_transform, loc, angle, None)
         self.publish_lidar_prediction(lidar_msg.header, predictions)
         self.publish_point_cloud(lidar_msg.header, self.localizer.particles)
