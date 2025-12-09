@@ -65,23 +65,29 @@ class MCL:
         self.ndi_mode = _to_ndimage_mode('constant')
 
     def update_motion_particles(self, old_transform, new_transform):
-        #parallel only, wont work for holonomic robot
-        r = old_transform.transform.rotation
-        rot = [r.x, r.y, r.z, r.w]
-        _, _, odom_angle = euler_from_quaternion(rot)
-        parallel_x = np.cos(odom_angle)
-        parallel_y = np.sin(odom_angle)
+        #p.136 Probabilistic Robotics
+        alpha1 = 0.15  # this is different from book, ignoring d_rot1
+                      # Just using angle diffs, better for holonomic
+        alpha3 = 0.1
         diff_x = new_transform.transform.translation.x - old_transform.transform.translation.x
         diff_y = new_transform.transform.translation.y - old_transform.transform.translation.y
-        odom_diff = np.array([diff_x , diff_y])
-        parallel = np.dot(np.array([parallel_x, parallel_y]), odom_diff)
-        self.particles[:, 1] += parallel * np.cos(self.particles[:,2])/self.resolution
-        self.particles[:, 0] -= parallel * np.sin(self.particles[:,2])/self.resolution
+        r = old_transform.transform.rotation
+        rot = [r.x, r.y, r.z, r.w]
+        _, _, theta_hat = euler_from_quaternion(rot)
         new_r = new_transform.transform.rotation
         new_rot = [new_r.x, new_r.y, new_r.z, new_r.w]
-        _, _, new_odom_angle = euler_from_quaternion(new_rot)
-        diff_rot = new_odom_angle - odom_angle  # is this valid?
-        self.particles[:, 2] += diff_rot
+        _, _, theta_hat_prime = euler_from_quaternion(new_rot)
+        d_rot1 = np.arctan2(diff_y, diff_x) - theta_hat
+        d_trans = np.sqrt(diff_y**2 + diff_x**2)
+        d_rot2 = theta_hat_prime - theta_hat - d_rot1
+        abs_diff_angle = np.abs(theta_hat_prime - theta_hat)
+        diff_angle = np.min(np.array([abs_diff_angle, 2*np.pi - abs_diff_angle]))
+        sample_d_rot1 = d_rot1 + np.random.normal(size=self.num_particles)*diff_angle*alpha1
+        sample_d_trans = d_trans + np.random.normal(size=self.num_particles)*d_trans*alpha3
+        sample_d_rot2 = d_rot2 + np.random.normal(size=self.num_particles)*diff_angle*alpha1
+        self.particles[:, 1] += sample_d_trans * np.cos(self.particles[:, 2] + sample_d_rot1)/self.resolution
+        self.particles[:, 0] -= sample_d_trans * np.sin(self.particles[:, 2] + sample_d_rot1)/self.resolution
+        self.particles[:, 2] += sample_d_rot1 + sample_d_rot2
 
     def predictions(self, map_image, particles):
         image = map_image==0
@@ -94,8 +100,8 @@ class MCL:
 
     def resample_particles(self, probs):
         ls = np.array(np.random.choice(np.arange(len(self.particles)), size=self.replacement, p=probs))
-        self.particles[:self.replacement, :2] = self.particles[ls][:, :2] + 1 * np.random.normal(size=(self.replacement, 2))
-        self.particles[:self.replacement, 2] = self.particles[ls][:, 2] + .1 * np.random.normal(size=(self.replacement))
+        self.particles[:self.replacement, :2] = self.particles[ls][:, :2]
+        self.particles[:self.replacement, 2] = self.particles[ls][:, 2]
         new_particles = self.num_particles - self.replacement
         self.particles[self.replacement:] = np.transpose(np.array([ self.map_height*np.random.random(size=new_particles), self.map_width*np.random.random(size=new_particles), 2 * np.pi * np.random.random(size=new_particles) ]))
 
