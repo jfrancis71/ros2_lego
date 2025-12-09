@@ -75,7 +75,6 @@ class MCL:
         diff_y = new_transform.transform.translation.y - old_transform.transform.translation.y
         odom_diff = np.array([diff_x , diff_y])
         parallel = np.dot(np.array([parallel_x, parallel_y]), odom_diff)
-        print("parallel=", parallel, odom_angle, diff_x, diff_y)
         self.particles[:, 1] += parallel * np.cos(self.particles[:,2])/self.resolution
         self.particles[:, 0] -= parallel * np.sin(self.particles[:,2])/self.resolution
         new_r = new_transform.transform.rotation
@@ -100,16 +99,14 @@ class MCL:
         new_particles = self.num_particles - self.replacement
         self.particles[self.replacement:] = np.transpose(np.array([ self.map_height*np.random.random(size=new_particles), self.map_width*np.random.random(size=new_particles), 2 * np.pi * np.random.random(size=new_particles) ]))
 
-    def localize(self, scan):
+    def update_lidar_particles(self, scan):
         new_scan = skimage.transform.resize(scan.astype(np.float32), (self.num_angles,))
         new_scan = np.roll(new_scan, -90)  # account for laser mounting.
         predictions = self.predictions(self.map_image, self.particles)
         prediction_error = np.nanmean((predictions - new_scan[np.newaxis, :])**2, axis=1)
         probs = np.exp(-prediction_error)
         probs = probs/probs.sum()
-        print("publish...")
         self.resample_particles(probs)
-
         x_c = np.nanmean(self.particles[:self.replacement, 1])
         y_c = np.nanmean(self.particles[:self.replacement, 0])
         x_std_c = np.sqrt(np.nanmean(self.particles[:self.replacement, 1]**2) - x_c**2)
@@ -121,16 +118,13 @@ class MCL:
         y_w = (self.map_height-y_c)*self.resolution + self.origin[1]
         x_std_w = x_std_c*self.resolution
         y_std_w = y_std_c*self.resolution
-
         mean_predictions = self.predictions(self.map_image, np.array([[y_c, x_c, angle]]))[0]
-
-        print("ANGLE=", angle, " A STD=", angle_std_c)
         return (x_w, y_w), angle, x_std_w, y_std_w, angle_std_c, mean_predictions
 
 
-class Localizer(Node):
+class LocalizerNode(Node):
     def __init__(self):
-        super().__init__("nav")
+        super().__init__("localizer")
         self.declare_parameter('map', 'my_house.yaml')
         self.map_file = self.get_parameter('map').get_parameter_value().string_value
         with open(self.map_file, 'r') as map_file:
@@ -156,45 +150,41 @@ class Localizer(Node):
             history=HistoryPolicy.KEEP_LAST,
             )
         self.tf_listener = TransformListener(self.tf_buffer, self, spin_thread=True, qos=qos)
-        self.tf_broadcaster = TransformBroadcaster(self)
         map = skimage.io.imread(os.path.join(os.path.split(self.map_file)[0], image_filename))
         self.localizer = MCL(map, origin, resolution)
         self.old_transform = None
         self.tf_static_broadcaster = StaticTransformBroadcaster(self)
 
-    def send_map_base_link_transform(self, base_link_to_odom_transform, loc, angle, tim):
+    def send_map_base_link_transform(self, base_link_to_odom_tf, loc, angle, tim):
         try:
-            base_laser_to_base_link_transform = self.tf_buffer.lookup_transform(
+            base_laser_to_base_link_tf = self.tf_buffer.lookup_transform(
                 "base_laser",
                 "base_link",
                 rclpy.time.Time())
         except TransformException as ex:
             print("No Transform")
             return
-        zero_to_odom_transform = TransformStamped()
-        zero_to_odom_transform.header.stamp = self.get_clock().now().to_msg()
-        zero_to_odom_transform.header.frame_id = 'zero'
-        zero_to_odom_transform.child_frame_id = 'odom'
-        zero_to_odom_transform.transform = base_link_to_odom_transform.transform
-        self.tf_static_broadcaster.sendTransform(zero_to_odom_transform)
-
-        map_to_zero_transform = TransformStamped()
-        map_to_zero_transform.header.stamp = \
+        zero_to_odom_tf = TransformStamped()
+        zero_to_odom_tf.header.stamp = self.get_clock().now().to_msg()
+        zero_to_odom_tf.header.frame_id = 'zero'
+        zero_to_odom_tf.child_frame_id = 'odom'
+        zero_to_odom_tf.transform = base_link_to_odom_tf.transform
+        map_to_zero_tf = TransformStamped()
+        map_to_zero_tf.header.stamp = \
             self.get_clock().now().to_msg()
-        map_to_zero_transform.header.frame_id = 'map'
-        map_to_zero_transform.child_frame_id = 'zero'
-        map_to_zero_transform.transform.translation.x = \
+        map_to_zero_tf.header.frame_id = 'map'
+        map_to_zero_tf.child_frame_id = 'zero'
+        map_to_zero_tf.transform.translation.x = \
             loc[0]
-        map_to_zero_transform.transform.translation.y = \
+        map_to_zero_tf.transform.translation.y = \
             loc[1]
-        map_to_zero_transform.transform.translation.z = 0.0
+        map_to_zero_tf.transform.translation.z = 0.0
         q = quaternion_from_euler(0, 0, angle)
-        map_to_zero_transform.transform.rotation.x = q[0]
-        map_to_zero_transform.transform.rotation.y = q[1]
-        map_to_zero_transform.transform.rotation.z = q[2]
-        map_to_zero_transform.transform.rotation.w = q[3]
-        self.tf_static_broadcaster.sendTransform(map_to_zero_transform)
-
+        map_to_zero_tf.transform.rotation.x = q[0]
+        map_to_zero_tf.transform.rotation.y = q[1]
+        map_to_zero_tf.transform.rotation.z = q[2]
+        map_to_zero_tf.transform.rotation.w = q[3]
+        self.tf_static_broadcaster.sendTransform([zero_to_odom_tf, map_to_zero_tf])
 
     def publish_lidar_prediction(self, header, ranges):
         lidar_msg1 = LaserScan()
@@ -220,28 +210,18 @@ class Localizer(Node):
         self.particles_publisher.publish(cloud_msg)
 
     def publish_loc_uncertainty_marker(self, header, loc, angle, std_x, std_y):
-        print("LOC=", std_x)
         marker = Marker()
         marker.header.stamp = header.stamp
         marker.header.frame_id = "base_link"
         marker.ns = "basic_shapes"
         marker.id = 0
-        marker.type = 3  # CYLINDER
-        marker.action = 0  # ADD
-        marker.pose.position.x = 0.0
-        marker.pose.position.y = 0.0
-        marker.pose.position.z = 0.0
-        marker.pose.orientation.x = 0.0
-        marker.pose.orientation.y = 0.0
-        marker.pose.orientation.z = 0.0
+        marker.type = Marker.CYLINDER
+        marker.action = Marker.ADD
+        marker.pose.position.x, marker.pose.position.y, marker.pose.position.z = 0.0, 0.0, 0.0
+        marker.pose.orientation.x, marker.pose.orientation.y, marker.pose.orientation.z = 0.0, 0.0, 0.0
         marker.pose.orientation.w = 1.0
-        marker.scale.x = std_x
-        marker.scale.y = std_y
-        marker.scale.z = 0.5
-        marker.color.r = 0.0
-        marker.color.g = 0.0
-        marker.color.b = 1.0
-        marker.color.a = .2
+        marker.scale.x, marker.scale.y, marker.scale.z = std_x, std_y, 0.5
+        marker.color.r, marker.color.g, marker.color.b, marker.color.a = 0.0, 0.0, 1.0, .2
         marker.frame_locked = True
         self.marker_loc_uncertainty_publisher.publish(marker)
 
@@ -254,13 +234,8 @@ class Localizer(Node):
         marker.type = Marker.LINE_LIST
         marker.action = Marker.ADD
 
-        marker.scale.x = .1
-        marker.scale.y = .1
-        marker.scale.z = .1
-        marker.color.r = 0.0
-        marker.color.g = 0.0
-        marker.color.b = 1.0
-        marker.color.a = 1.0
+        marker.scale.x, marker.scale.y, marker.scale.z = .1, .1, .1
+        marker.color.r, marker.color.g, marker.color.b, marker.color.a = 0.0, 0.0, 1.0, 1.0
         mstd_angle = np.min((std_angle, np.pi))
         point1 = Point()
         point1.x, point1.y, point1.z = 0.0, 0.0, 0.1
@@ -298,8 +273,9 @@ class Localizer(Node):
         if delay > .1:
             print("DELAY ", delay)
             return
+        print("Updating...")
         self.localizer.update_motion_particles(self.old_transform, odom_to_base_link_transform)
-        loc, angle, std_x, std_y, std_angle, predictions = self.localizer.localize(scan)
+        loc, angle, std_x, std_y, std_angle, predictions = self.localizer.update_lidar_particles(scan)
         if self.old_transform is None:
             self.old_transform = odom_to_base_link_transform
         self.send_map_base_link_transform(base_link_to_odom_transform, loc, angle, None)
@@ -311,7 +287,7 @@ class Localizer(Node):
 
 
 rclpy.init()
-localizer = Localizer()
-rclpy.spin(localizer)
-nav.destroy_node()
+localizer_node = LocalizerNode()
+rclpy.spin(localizer_node)
+localizer_node.destroy_node()
 rclpy.shutdown()
