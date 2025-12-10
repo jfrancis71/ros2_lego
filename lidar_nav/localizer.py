@@ -33,6 +33,7 @@ from scipy import ndimage as ndi
 from skimage._shared.utils import _to_ndimage_mode
 from skimage._shared.utils import convert_to_float
 from scipy.stats import vonmises
+from scipy.stats import norm
 
 
 class MCL:
@@ -105,12 +106,20 @@ class MCL:
         new_particles = self.num_particles - self.replacement
         self.particles[self.replacement:] = np.transpose(np.array([ self.map_height*np.random.random(size=new_particles), self.map_width*np.random.random(size=new_particles), 2 * np.pi * np.random.random(size=new_particles) ]))
 
+    def prediction_prob(self, predictions, scan_line):
+        pdf = norm.logpdf(scan_line, loc=predictions, scale=.1)
+        isnan = np.isnan(scan_line)
+        valid = (1-isnan)
+        logpdf = np.nan_to_num(pdf) -50 * isnan
+        logs = logpdf.sum(axis=1)/10000
+        return logs
+
     def update_lidar_particles(self, scan):
         new_scan = skimage.transform.resize(scan.astype(np.float32), (self.num_angles,))
         new_scan = np.roll(new_scan, -90)  # account for laser mounting.
         predictions = self.predictions(self.map_image, self.particles)
-        prediction_error = np.nanmean((predictions - new_scan[np.newaxis, :])**2, axis=1)
-        probs = np.exp(-prediction_error)
+        logprobs = self.prediction_prob(predictions, new_scan[np.newaxis, :])
+        probs = np.exp(logprobs)
         probs = probs/probs.sum()
         self.resample_particles(probs)
         x_c = np.nanmean(self.particles[:self.replacement, 1])
