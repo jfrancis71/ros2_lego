@@ -169,6 +169,7 @@ class LocalizerNode(Node):
         self.localizer = MCL(map, origin, resolution)
         self.old_transform = None
         self.tf_static_broadcaster = StaticTransformBroadcaster(self)
+        self.init_phase = 0
 
     def send_map_base_link_transform(self, base_link_to_odom_tf, loc, angle, tim):
         try:
@@ -289,6 +290,11 @@ class LocalizerNode(Node):
             print("DELAY ", delay)
             return
         print("Updating...")
+        self.init_phase += 1
+        if self.init_phase < 20:
+            # add some noise during init phase
+            self.localizer.particles[:self.localizer.replacement, :2] += 1 * np.random.normal(size=(self.localizer.replacement, 2))
+            self.localizer.particles[:self.localizer.replacement, 2] += .1 * np.random.normal(size=(self.localizer.replacement))
         self.localizer.update_motion_particles(self.old_transform, odom_to_base_link_transform)
         loc, angle, std_x, std_y, std_angle, predictions = self.localizer.update_lidar_particles(scan)
         if self.old_transform is None:
