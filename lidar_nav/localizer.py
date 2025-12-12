@@ -96,6 +96,8 @@ class MCL:
         polar_coord_predictions = ndi.map_coordinates(image, trans_coords, prefilter=False, mode=self.ndi_mode, order=0, cval=0.0)
         skimage.transform._warps._clip_warp_output(image, polar_coord_predictions, 'constant', 0.0, True)
         polar_coords = np.argmax(polar_coord_predictions, axis=2)*self.resolution
+        out_of_range = np.where(np.max(polar_coord_predictions, axis=2)==0)
+        polar_coords[out_of_range] = -1
         predictions = np.array([ np.flip(np.roll(polar_coords[particle_id], int(360 * self.particles[particle_id, 2] / (2 * np.pi)))) for particle_id in range(len(particles))])
         return predictions
 
@@ -107,12 +109,13 @@ class MCL:
         self.particles[self.replacement:] = np.transpose(np.array([ self.map_height*np.random.random(size=new_particles), self.map_width*np.random.random(size=new_particles), 2 * np.pi * np.random.random(size=new_particles) ]))
 
     def prediction_prob(self, predictions, scan_line):
+        predictions[np.where(predictions<-.5)] = 0.0
         pdf = norm.logpdf(scan_line, loc=predictions, scale=.1)
         isnan = np.isnan(scan_line)
         valid = (1-isnan)
         logpdf = np.nan_to_num(pdf) -50 * isnan
-        logs = logpdf.sum(axis=1)/10000
-        return logs
+        logs = logpdf.sum(axis=1)
+        return logs/10000
 
     def update_lidar_particles(self, scan):
         new_scan = skimage.transform.resize(scan.astype(np.float32), (self.num_angles,))
