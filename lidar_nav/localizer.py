@@ -124,13 +124,13 @@ class MCL:
         logpdf = np.nan_to_num(new_pdf) - 0 * isnan
         logs = logpdf.sum(axis=1)
         print("Logs=", logs[:400], " BEST=", logs.max())
-        return logs/1000
+        return logpdf, logs/1000
 
     def update_lidar_particles(self, scan):
         new_scan = skimage.transform.resize(scan.astype(np.float32), (self.num_angles,))
         new_scan = np.roll(new_scan, -90)  # account for laser mounting.
         predictions = self.predictions(self.map_image, self.particles)
-        logprobs = self.prediction_prob(predictions, new_scan[np.newaxis, :])
+        _, logprobs = self.prediction_prob(predictions, new_scan[np.newaxis, :])
         probs = np.exp(logprobs)
         probs = probs/probs.sum()
         self.resample_particles(probs)
@@ -140,12 +140,13 @@ class MCL:
         y_std_c = np.sqrt(np.nanmean(self.particles[:self.replacement, 0]**2) - y_c**2)
         kappa, angle, _ = vonmises.fit(self.particles[:self.replacement, 2], fscale=1)
         angle_std_c = 1/np.sqrt(kappa)
-        mean_predictions = self.predictions(self.map_image, np.array([[y_c, x_c, angle]]))[0]
+        mean_predictions = self.predictions(self.map_image, np.array([[y_c, x_c, angle]]))
+        logs, _ = self.prediction_prob(mean_predictions, new_scan[np.newaxis, :])
         x_w = x_c*self.resolution + self.origin[0]
         y_w = (self.map_height-y_c)*self.resolution + self.origin[1]
         x_std_w = x_std_c*self.resolution
         y_std_w = y_std_c*self.resolution
-        return (x_w, y_w), angle, x_std_w, y_std_w, angle_std_c, mean_predictions
+        return (x_w, y_w), angle, x_std_w, y_std_w, angle_std_c, mean_predictions[0], logs[0]
 
 
 class LocalizerNode(Node):
@@ -165,9 +166,12 @@ class LocalizerNode(Node):
             1)
         self.pred_publisher = \
             self.create_publisher(LaserScan, "/pred_laser", 1)
+        self.pdf_publisher = \
+            self.create_publisher(LaserScan, "/pdf", 1)
         self.particles_publisher = \
             self.create_publisher(PointCloud2, "/particles", 1)
         self.marker_loc_uncertainty_publisher = self.create_publisher(Marker, 'loc_uncertainty', 1)
+        self.marker_pdf_publisher = self.create_publisher(Marker, '/pdf_marker', 1)
         self.angle_uncertainty_publisher = self.create_publisher(Marker, 'angle_uncertainty', 1)
         self.tf_buffer = Buffer()
         qos = QoSProfile(
@@ -225,6 +229,36 @@ class LocalizerNode(Node):
         lidar_msg1.range_max = 25.0
         lidar_msg1.header = header
         self.pred_publisher.publish(lidar_msg1)
+
+    def publish_pdf(self, header, pdf):
+        lidar_msg1 = LaserScan()
+        remap = -np.tanh(pdf)+2
+        lidar_msg1.ranges = np.roll(remap, 90)  # Account for laser mounting
+        lidar_msg1.angle_min = 0.0
+        lidar_msg1.angle_max = 6.28318548
+        lidar_msg1.angle_increment = 2 * np.pi / 360
+        lidar_msg1.time_increment = 0.00019850002718158066
+        lidar_msg1.scan_time = 0.10004401206970215
+        lidar_msg1.range_min = 0.019999999552965164
+        lidar_msg1.range_max = 25.0
+        lidar_msg1.header = header
+        self.pdf_publisher.publish(lidar_msg1)
+
+    def publish_pdf_marker(self, header):
+        marker = Marker()
+        marker.header.stamp = header.stamp
+        marker.header.frame_id = "base_link"
+        marker.ns = "basic_shapes"
+        marker.id = 0
+        marker.type = Marker.CYLINDER
+        marker.action = Marker.ADD
+        marker.pose.position.x, marker.pose.position.y, marker.pose.position.z = 0.0, 0.0, 0.0
+        marker.pose.orientation.x, marker.pose.orientation.y, marker.pose.orientation.z = 0.0, 0.0, 0.0
+        marker.pose.orientation.w = 1.0
+        marker.scale.x, marker.scale.y, marker.scale.z = 4.0, 4.0, 0.5
+        marker.color.r, marker.color.g, marker.color.b, marker.color.a = 0.3, 0.0, 1.0, .2
+        marker.frame_locked = True
+        self.marker_pdf_publisher.publish(marker)
 
     def publish_point_cloud(self, header, particles):
         points = np.zeros([self.localizer.replacement, 3])
@@ -307,13 +341,15 @@ class LocalizerNode(Node):
             self.localizer.particles[:self.localizer.replacement, :2] += 1 * np.random.normal(size=(self.localizer.replacement, 2))
             self.localizer.particles[:self.localizer.replacement, 2] += .1 * np.random.normal(size=(self.localizer.replacement))
         self.localizer.update_motion_particles(self.old_transform, odom_to_base_link_transform)
-        loc, angle, std_x, std_y, std_angle, predictions = self.localizer.update_lidar_particles(scan)
+        loc, angle, std_x, std_y, std_angle, predictions, log_prob = self.localizer.update_lidar_particles(scan)
         if self.old_transform is None:
             self.old_transform = odom_to_base_link_transform
         self.send_map_base_link_transform(base_link_to_odom_transform, loc, angle, None)
         self.publish_lidar_prediction(lidar_msg.header, predictions)
+        self.publish_pdf(lidar_msg.header, log_prob)
         self.publish_point_cloud(lidar_msg.header, self.localizer.particles)
         self.publish_loc_uncertainty_marker(lidar_msg.header, loc, angle, std_x, std_y)
+        self.publish_pdf_marker(lidar_msg.header)
         self.publish_angle_uncertainty_marker(lidar_msg.header, loc, angle, std_angle)
         self.old_transform = odom_to_base_link_transform
 
