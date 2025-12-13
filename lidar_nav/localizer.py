@@ -313,6 +313,15 @@ class LocalizerNode(Node):
         _, _, theta = euler_from_quaternion(rot)
         return (t.x, t.y, theta)
 
+    def publish_ros2(self, header, base_link_to_odom_transform, pose, pose_uncertainty, particles, predictions, log_prob):
+        self.send_map_base_link_transform(base_link_to_odom_transform, pose)
+        self.publish_lidar_prediction(header, predictions)
+        self.publish_pdf(header, log_prob)
+        self.publish_point_cloud(header, particles)
+        self.publish_loc_uncertainty_marker(header, pose, pose_uncertainty)
+        self.publish_pdf_marker(header)
+        self.publish_angle_uncertainty_marker(header, pose_uncertainty)
+
     def lidar_callback(self, lidar_msg):
         scan = np.array(lidar_msg.ranges)
         try:
@@ -349,13 +358,7 @@ class LocalizerNode(Node):
         new_pose = self.ros2_to_pose(odom_to_base_link_transform)
         self.localizer.update_motion_particles(old_pose, new_pose)
         pose, pose_uncertainty, predictions, log_prob = self.localizer.update_lidar_particles(scan)
-        self.send_map_base_link_transform(base_link_to_odom_transform, pose)
-        self.publish_lidar_prediction(lidar_msg.header, predictions)
-        self.publish_pdf(lidar_msg.header, log_prob)
-        self.publish_point_cloud(lidar_msg.header, self.localizer.particles)
-        self.publish_loc_uncertainty_marker(lidar_msg.header, pose, pose_uncertainty)
-        self.publish_pdf_marker(lidar_msg.header)
-        self.publish_angle_uncertainty_marker(lidar_msg.header, pose_uncertainty)
+        self.publish_ros2(lidar_msg.header, base_link_to_odom_transform, pose, pose_uncertainty, self.localizer.particles, predictions, log_prob)
         self.old_transform = odom_to_base_link_transform
 
 
