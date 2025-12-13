@@ -145,7 +145,6 @@ class MCL:
         y_w = (self.map_height-y_c)*self.resolution + self.origin[1]
         x_std_w = x_std_c*self.resolution
         y_std_w = y_std_c*self.resolution
-        mean_predictions = self.predictions(self.map_image, np.array([[y_c, x_c, angle]]))[0]
         return (x_w, y_w), angle, x_std_w, y_std_w, angle_std_c, mean_predictions
 
 
