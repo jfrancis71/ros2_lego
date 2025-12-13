@@ -121,7 +121,7 @@ class MCL:
         valid = (1-isnan)
         stack = np.stack([pdf, noise])
         new_pdf = scipy.special.logsumexp(stack, axis=0)
-        logpdf = np.nan_to_num(new_pdf) -50 * isnan
+        logpdf = np.nan_to_num(new_pdf) - 0 * isnan
         logs = logpdf.sum(axis=1)
         print("Logs=", logs[:400], " BEST=", logs.max())
         return logs/1000
