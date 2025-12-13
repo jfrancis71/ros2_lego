@@ -34,6 +34,8 @@ from skimage._shared.utils import _to_ndimage_mode
 from skimage._shared.utils import convert_to_float
 from scipy.stats import vonmises
 from scipy.stats import norm
+from scipy.stats import uniform
+import scipy
 
 
 class MCL:
@@ -110,13 +112,19 @@ class MCL:
 
     def prediction_prob(self, predictions, scan_line):
         predictions = predictions.copy()
-        predictions[np.where(predictions<-.5)] = 0.0
         pdf = norm.logpdf(scan_line, loc=predictions, scale=.1)
+        out_range = uniform.logpdf(scan_line, loc=predictions*0.0 + 5.0, scale=20.0)
+        wh = np.where(predictions<-.5)
+        pdf[wh] = out_range[wh]
+        noise = uniform.logpdf(scan_line, loc=predictions*0.0 + 0.0, scale=25.0) + np.log(.01)
         isnan = np.isnan(scan_line)
         valid = (1-isnan)
-        logpdf = np.nan_to_num(pdf) -50 * isnan
+        stack = np.stack([pdf, noise])
+        new_pdf = scipy.special.logsumexp(stack, axis=0)
+        logpdf = np.nan_to_num(new_pdf) -50 * isnan
         logs = logpdf.sum(axis=1)
-        return logs/10000
+        print("Logs=", logs[:400], " BEST=", logs.max())
+        return logs/1000
 
     def update_lidar_particles(self, scan):
         new_scan = skimage.transform.resize(scan.astype(np.float32), (self.num_angles,))
