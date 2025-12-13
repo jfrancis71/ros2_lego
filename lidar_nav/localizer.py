@@ -123,8 +123,21 @@ class MCL:
         new_pdf = scipy.special.logsumexp(stack, axis=0)
         logpdf = np.nan_to_num(new_pdf) - 0 * isnan
         logs = logpdf.sum(axis=1)
-        print("Logs=", logs[:400], " BEST=", logs.max())
+        print("BEST=", logs.max())
         return logpdf, logs/1000
+
+    def expected_pose(self):
+        x_mean_image = np.nanmean(self.particles[:self.replacement, 1])
+        y_mean_image = np.nanmean(self.particles[:self.replacement, 0])
+        x_std_image = np.sqrt(np.nanmean(self.particles[:self.replacement, 1]**2) - x_mean_image**2)
+        y_std_image = np.sqrt(np.nanmean(self.particles[:self.replacement, 0]**2) - y_mean_image**2)
+        kappa, angle, _ = vonmises.fit(self.particles[:self.replacement, 2], fscale=1)
+        angle_std = 1/np.sqrt(kappa)
+        x_mean_map = x_mean_image*self.resolution + self.origin[0]
+        y_mean_map = (self.map_height-y_mean_image)*self.resolution + self.origin[1]
+        x_std_map = x_std_image*self.resolution
+        y_std_map = y_std_image*self.resolution
+        return (x_mean_map, y_mean_map, angle), (x_std_map, y_std_map, angle_std)
 
     def update_lidar_particles(self, scan):
         new_scan = skimage.transform.resize(scan.astype(np.float32), (self.num_angles,))
@@ -134,19 +147,10 @@ class MCL:
         probs = np.exp(logprobs)
         probs = probs/probs.sum()
         self.resample_particles(probs)
-        x_c = np.nanmean(self.particles[:self.replacement, 1])
-        y_c = np.nanmean(self.particles[:self.replacement, 0])
-        x_std_c = np.sqrt(np.nanmean(self.particles[:self.replacement, 1]**2) - x_c**2)
-        y_std_c = np.sqrt(np.nanmean(self.particles[:self.replacement, 0]**2) - y_c**2)
-        kappa, angle, _ = vonmises.fit(self.particles[:self.replacement, 2], fscale=1)
-        angle_std_c = 1/np.sqrt(kappa)
-        mean_predictions = self.predictions(self.map_image, np.array([[y_c, x_c, angle]]))
+        pose, pose_uncertainty = self.expected_pose()
+        mean_predictions = self.predictions(self.map_image, np.array([[pose[1], pose[0], pose[2]]]))
         logs, _ = self.prediction_prob(mean_predictions, new_scan[np.newaxis, :])
-        x_w = x_c*self.resolution + self.origin[0]
-        y_w = (self.map_height-y_c)*self.resolution + self.origin[1]
-        x_std_w = x_std_c*self.resolution
-        y_std_w = y_std_c*self.resolution
-        return (x_w, y_w), angle, x_std_w, y_std_w, angle_std_c, mean_predictions[0], logs[0]
+        return pose, pose_uncertainty, mean_predictions[0], logs[0]
 
 
 class LocalizerNode(Node):
@@ -186,7 +190,7 @@ class LocalizerNode(Node):
         self.tf_static_broadcaster = StaticTransformBroadcaster(self)
         self.init_phase = 0
 
-    def send_map_base_link_transform(self, base_link_to_odom_tf, loc, angle, tim):
+    def send_map_base_link_transform(self, base_link_to_odom_tf, pose):
         try:
             base_laser_to_base_link_tf = self.tf_buffer.lookup_transform(
                 "base_laser",
@@ -206,11 +210,11 @@ class LocalizerNode(Node):
         map_to_zero_tf.header.frame_id = 'map'
         map_to_zero_tf.child_frame_id = 'zero'
         map_to_zero_tf.transform.translation.x = \
-            loc[0]
+            pose[0]
         map_to_zero_tf.transform.translation.y = \
-            loc[1]
+            pose[1]
         map_to_zero_tf.transform.translation.z = 0.0
-        q = quaternion_from_euler(0, 0, angle)
+        q = quaternion_from_euler(0, 0, pose[2])
         map_to_zero_tf.transform.rotation.x = q[0]
         map_to_zero_tf.transform.rotation.y = q[1]
         map_to_zero_tf.transform.rotation.z = q[2]
@@ -270,7 +274,7 @@ class LocalizerNode(Node):
         cloud_msg = point_cloud2.create_cloud_xyz32(cloud_msg_header, points)
         self.particles_publisher.publish(cloud_msg)
 
-    def publish_loc_uncertainty_marker(self, header, loc, angle, std_x, std_y):
+    def publish_loc_uncertainty_marker(self, header, pose, pose_uncertainty):
         marker = Marker()
         marker.header.stamp = header.stamp
         marker.header.frame_id = "base_link"
@@ -281,12 +285,12 @@ class LocalizerNode(Node):
         marker.pose.position.x, marker.pose.position.y, marker.pose.position.z = 0.0, 0.0, 0.0
         marker.pose.orientation.x, marker.pose.orientation.y, marker.pose.orientation.z = 0.0, 0.0, 0.0
         marker.pose.orientation.w = 1.0
-        marker.scale.x, marker.scale.y, marker.scale.z = std_x, std_y, 0.5
+        marker.scale.x, marker.scale.y, marker.scale.z = pose_uncertainty[0], pose_uncertainty[1], 0.5
         marker.color.r, marker.color.g, marker.color.b, marker.color.a = 0.0, 0.0, 1.0, .2
         marker.frame_locked = True
         self.marker_loc_uncertainty_publisher.publish(marker)
 
-    def publish_angle_uncertainty_marker(self, header, loc, angle, std_angle):
+    def publish_angle_uncertainty_marker(self, header, pose_uncertainty):
         marker = Marker()
         marker.header.stamp = header.stamp
         marker.header.frame_id = "base_link"
@@ -297,7 +301,7 @@ class LocalizerNode(Node):
 
         marker.scale.x, marker.scale.y, marker.scale.z = .1, .1, .1
         marker.color.r, marker.color.g, marker.color.b, marker.color.a = 0.0, 0.0, 1.0, 1.0
-        mstd_angle = np.min((std_angle, np.pi))
+        mstd_angle = np.min((pose_uncertainty[2], np.pi))
         point1 = Point()
         point1.x, point1.y, point1.z = 0.0, 0.0, 0.1
         point2 = Point()
@@ -341,16 +345,16 @@ class LocalizerNode(Node):
             self.localizer.particles[:self.localizer.replacement, :2] += 1 * np.random.normal(size=(self.localizer.replacement, 2))
             self.localizer.particles[:self.localizer.replacement, 2] += .1 * np.random.normal(size=(self.localizer.replacement))
         self.localizer.update_motion_particles(self.old_transform, odom_to_base_link_transform)
-        loc, angle, std_x, std_y, std_angle, predictions, log_prob = self.localizer.update_lidar_particles(scan)
+        pose, pose_uncertainty, predictions, log_prob = self.localizer.update_lidar_particles(scan)
         if self.old_transform is None:
             self.old_transform = odom_to_base_link_transform
-        self.send_map_base_link_transform(base_link_to_odom_transform, loc, angle, None)
+        self.send_map_base_link_transform(base_link_to_odom_transform, pose)
         self.publish_lidar_prediction(lidar_msg.header, predictions)
         self.publish_pdf(lidar_msg.header, log_prob)
         self.publish_point_cloud(lidar_msg.header, self.localizer.particles)
-        self.publish_loc_uncertainty_marker(lidar_msg.header, loc, angle, std_x, std_y)
+        self.publish_loc_uncertainty_marker(lidar_msg.header, pose, pose_uncertainty)
         self.publish_pdf_marker(lidar_msg.header)
-        self.publish_angle_uncertainty_marker(lidar_msg.header, loc, angle, std_angle)
+        self.publish_angle_uncertainty_marker(lidar_msg.header, pose_uncertainty)
         self.old_transform = odom_to_base_link_transform
 
 
