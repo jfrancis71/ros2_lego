@@ -67,23 +67,17 @@ class MCL:
         self.coord_map = np.transpose(c, axes=(1, 2, 0))[:, :, np.newaxis, :]
         self.ndi_mode = _to_ndimage_mode('constant')
 
-    def update_motion_particles(self, old_transform, new_transform):
+    def update_motion_particles(self, old_odom_pose, new_odom_pose):
         #p.136 Probabilistic Robotics
         alpha1 = 0.15  # this is different from book, ignoring d_rot1
                       # Just using angle diffs, better for holonomic
         alpha3 = 0.1
-        diff_x = new_transform.transform.translation.x - old_transform.transform.translation.x
-        diff_y = new_transform.transform.translation.y - old_transform.transform.translation.y
-        r = old_transform.transform.rotation
-        rot = [r.x, r.y, r.z, r.w]
-        _, _, theta_hat = euler_from_quaternion(rot)
-        new_r = new_transform.transform.rotation
-        new_rot = [new_r.x, new_r.y, new_r.z, new_r.w]
-        _, _, theta_hat_prime = euler_from_quaternion(new_rot)
-        d_rot1 = np.arctan2(diff_y, diff_x) - theta_hat
+        diff_x = new_odom_pose[0] - old_odom_pose[0]
+        diff_y = new_odom_pose[1] - old_odom_pose[1]
+        d_rot1 = np.arctan2(diff_y, diff_x) - old_odom_pose[2]
         d_trans = np.sqrt(diff_y**2 + diff_x**2)
-        d_rot2 = theta_hat_prime - theta_hat - d_rot1
-        abs_diff_angle = np.abs(theta_hat_prime - theta_hat)
+        d_rot2 = new_odom_pose[2] - old_odom_pose[2] - d_rot1
+        abs_diff_angle = np.abs(new_odom_pose[2] - old_odom_pose[2])
         diff_angle = np.min(np.array([abs_diff_angle, 2*np.pi - abs_diff_angle]))
         sample_d_rot1 = d_rot1 + np.random.normal(size=self.num_particles)*diff_angle*alpha1
         sample_d_trans = d_trans + np.random.normal(size=self.num_particles)*d_trans*alpha3
@@ -312,6 +306,13 @@ class LocalizerNode(Node):
         marker.frame_locked = True
         self.angle_uncertainty_publisher.publish(marker)
 
+    def ros2_to_pose(self, odom_transform):
+        t = odom_transform.transform.translation
+        r_t = odom_transform.transform.rotation
+        rot = [r_t.x, r_t.y, r_t.z, r_t.w]
+        _, _, theta = euler_from_quaternion(rot)
+        return (t.x, t.y, theta)
+
     def lidar_callback(self, lidar_msg):
         scan = np.array(lidar_msg.ranges)
         try:
@@ -344,10 +345,10 @@ class LocalizerNode(Node):
             # add some noise during init phase
             self.localizer.particles[:self.localizer.replacement, :2] += 1 * np.random.normal(size=(self.localizer.replacement, 2))
             self.localizer.particles[:self.localizer.replacement, 2] += .1 * np.random.normal(size=(self.localizer.replacement))
-        self.localizer.update_motion_particles(self.old_transform, odom_to_base_link_transform)
+        old_pose = self.ros2_to_pose(self.old_transform)
+        new_pose = self.ros2_to_pose(odom_to_base_link_transform)
+        self.localizer.update_motion_particles(old_pose, new_pose)
         pose, pose_uncertainty, predictions, log_prob = self.localizer.update_lidar_particles(scan)
-        if self.old_transform is None:
-            self.old_transform = odom_to_base_link_transform
         self.send_map_base_link_transform(base_link_to_odom_transform, pose)
         self.publish_lidar_prediction(lidar_msg.header, predictions)
         self.publish_pdf(lidar_msg.header, log_prob)
