@@ -98,7 +98,7 @@ class MCL:
         polar_coords = np.argmax(polar_coord_predictions, axis=2)*self.resolution
         out_of_range = np.where(np.max(polar_coord_predictions, axis=2)==0)
         polar_coords[out_of_range] = -1
-        predictions = np.array([ np.flip(np.roll(polar_coords[particle_id], int(360 * self.particles[particle_id, 2] / (2 * np.pi)))) for particle_id in range(len(particles))])
+        predictions = np.array([ np.flip(np.roll(polar_coords[particle_id], int(360 * particles[particle_id, 2] / (2 * np.pi)))) for particle_id in range(len(particles))])
         return predictions
 
     def resample_particles(self, probs):
@@ -109,6 +109,7 @@ class MCL:
         self.particles[self.replacement:] = np.transpose(np.array([ self.map_height*np.random.random(size=new_particles), self.map_width*np.random.random(size=new_particles), 2 * np.pi * np.random.random(size=new_particles) ]))
 
     def prediction_prob(self, predictions, scan_line):
+        predictions = predictions.copy()
         predictions[np.where(predictions<-.5)] = 0.0
         pdf = norm.logpdf(scan_line, loc=predictions, scale=.1)
         isnan = np.isnan(scan_line)
