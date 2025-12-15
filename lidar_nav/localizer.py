@@ -121,10 +121,8 @@ class MCL:
         return logpdf, logs/1000
 
     def expected_pose(self):
-        x_mean_image = np.nanmean(self.particles[:self.replacement, 1])
-        y_mean_image = np.nanmean(self.particles[:self.replacement, 0])
-        x_std_image = np.sqrt(np.nanmean(self.particles[:self.replacement, 1]**2) - x_mean_image**2)
-        y_std_image = np.sqrt(np.nanmean(self.particles[:self.replacement, 0]**2) - y_mean_image**2)
+        y_mean_image, x_mean_image, _ = np.mean(self.particles[:self.replacement], axis=0)
+        y_std_image, x_std_image, _ = np.std(self.particles[:self.replacement], axis=0)
         kappa, angle, _ = vonmises.fit(self.particles[:self.replacement, 2], fscale=1)
         angle_std = 1/np.sqrt(kappa)
         x_mean_map = x_mean_image*self.resolution + self.origin[0]
