@@ -123,9 +123,9 @@ class MCL:
         return logpdf, logs/1000
 
     def expected_pose(self, particles):
-        y_mean_image, x_mean_image, _ = np.mean(particles[:self.replacement], axis=0)
-        y_std_image, x_std_image, _ = np.std(particles[:self.replacement], axis=0)
-        kappa, angle, _ = vonmises.fit(particles[:self.replacement, 2], fscale=1)
+        y_mean_image, x_mean_image, _ = np.mean(particles, axis=0)
+        y_std_image, x_std_image, _ = np.std(particles, axis=0)
+        kappa, angle, _ = vonmises.fit(particles[:, 2], fscale=1)
         angle_std = 1/np.sqrt(kappa)
         x_mean_map = x_mean_image*self.resolution + self.origin[0]
         y_mean_map = (self.map_height-y_mean_image)*self.resolution + self.origin[1]
@@ -141,7 +141,7 @@ class MCL:
         probs = np.exp(logprobs)
         probs = probs/probs.sum()
         self.particles = self.resample_particles(self.particles, probs)
-        pose, pose_uncertainty = self.expected_pose(self.particles)
+        pose, pose_uncertainty = self.expected_pose(self.particles[:self.replacement])
         mean_predictions = self.predictions(self.map_image, np.array([[pose[1], pose[0], pose[2]]]))
         logs, _ = self.prediction_prob(mean_predictions, new_scan[np.newaxis, :])
         return pose, pose_uncertainty, mean_predictions[0], logs[0]
@@ -163,7 +163,7 @@ class MCL:
         probs = np.exp(lprobs*10)
         probs = probs/probs.sum()
         resampled_particles = self.resample_particles(self.particles, probs)
-        pose, pose_uncertainty = self.expected_pose(resampled_particles)
+        pose, pose_uncertainty = self.expected_pose(resampled_particles[:self.replacement])
         mean_predictions = self.predictions(self.map_image, np.array([[pose[1], pose[0], pose[2]]]))
         logs, _ = self.prediction_prob(mean_predictions, new_scan[np.newaxis, :])
         return pose, pose_uncertainty, mean_predictions[0], logs[0]
