@@ -97,12 +97,14 @@ class MCL:
         predictions = np.array([ np.flip(np.roll(polar_coords[particle_id], int(360 * particles[particle_id, 2] / (2 * np.pi)))) for particle_id in range(len(particles))])
         return predictions
 
-    def resample_particles(self, probs):
+    def resample_particles(self, particles, probs):
+        new_particles = np.zeros_like(self.particles)
         ls = np.array(np.random.choice(np.arange(len(self.particles)), size=self.replacement, p=probs))
-        self.particles[:self.replacement, :2] = self.particles[ls][:, :2]
-        self.particles[:self.replacement, 2] = self.particles[ls][:, 2]
-        new_particles = self.num_particles - self.replacement
-        self.particles[self.replacement:] = np.transpose(np.array([ self.map_height*np.random.random(size=new_particles), self.map_width*np.random.random(size=new_particles), 2 * np.pi * np.random.random(size=new_particles) ]))
+        new_particles[:self.replacement, :2] = particles[ls][:, :2]
+        new_particles[:self.replacement, 2] = particles[ls][:, 2]
+        kidnap_particles = self.num_particles - self.replacement
+        new_particles[self.replacement:] = np.transpose(np.array([ self.map_height*np.random.random(size=kidnap_particles), self.map_width*np.random.random(size=kidnap_particles), 2 * np.pi * np.random.random(size=kidnap_particles) ]))
+        return new_particles
 
     def prediction_prob(self, predictions, scan_line):
         predictions = predictions.copy()
@@ -120,10 +122,10 @@ class MCL:
         print("BEST=", logs.max())
         return logpdf, logs/1000
 
-    def expected_pose(self):
-        y_mean_image, x_mean_image, _ = np.mean(self.particles[:self.replacement], axis=0)
-        y_std_image, x_std_image, _ = np.std(self.particles[:self.replacement], axis=0)
-        kappa, angle, _ = vonmises.fit(self.particles[:self.replacement, 2], fscale=1)
+    def expected_pose(self, particles):
+        y_mean_image, x_mean_image, _ = np.mean(particles[:self.replacement], axis=0)
+        y_std_image, x_std_image, _ = np.std(particles[:self.replacement], axis=0)
+        kappa, angle, _ = vonmises.fit(particles[:self.replacement, 2], fscale=1)
         angle_std = 1/np.sqrt(kappa)
         x_mean_map = x_mean_image*self.resolution + self.origin[0]
         y_mean_map = (self.map_height-y_mean_image)*self.resolution + self.origin[1]
@@ -138,8 +140,8 @@ class MCL:
         _, logprobs = self.prediction_prob(predictions, new_scan[np.newaxis, :])
         probs = np.exp(logprobs)
         probs = probs/probs.sum()
-        self.resample_particles(probs)
-        pose, pose_uncertainty = self.expected_pose()
+        self.particles = self.resample_particles(self.particles, probs)
+        pose, pose_uncertainty = self.expected_pose(self.particles)
         mean_predictions = self.predictions(self.map_image, np.array([[pose[1], pose[0], pose[2]]]))
         logs, _ = self.prediction_prob(mean_predictions, new_scan[np.newaxis, :])
         return pose, pose_uncertainty, mean_predictions[0], logs[0]
@@ -155,9 +157,13 @@ class MCL:
         predictions = self.predictions(self.map_image, new_particles)
         _, new_logprobs = self.prediction_prob(predictions, new_scan[np.newaxis, :])
         change = (new_logprobs > old_logprobs)*1
-        change = np.stack((change,) * 3, axis=1)
-        self.particles = self.particles.copy()*(1-change) + new_particles*change
-        pose, pose_uncertainty = self.expected_pose()
+        change_3 = np.stack((change,) * 3, axis=1)
+        self.particles = self.particles.copy()*(1-change_3) + new_particles*change_3
+        lprobs = old_logprobs.copy()*(1-change) + new_logprobs*change
+        probs = np.exp(lprobs*10)
+        probs = probs/probs.sum()
+        resampled_particles = self.resample_particles(self.particles, probs)
+        pose, pose_uncertainty = self.expected_pose(resampled_particles)
         mean_predictions = self.predictions(self.map_image, np.array([[pose[1], pose[0], pose[2]]]))
         logs, _ = self.prediction_prob(mean_predictions, new_scan[np.newaxis, :])
         return pose, pose_uncertainty, mean_predictions[0], logs[0]
