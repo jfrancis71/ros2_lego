@@ -35,6 +35,7 @@ from skimage._shared.utils import convert_to_float
 from scipy.stats import vonmises
 from scipy.stats import norm
 from scipy.stats import uniform
+from scipy.stats import bernoulli
 import scipy
 
 
@@ -120,7 +121,7 @@ class MCL:
         logpdf = np.nan_to_num(new_pdf) - 0 * isnan
         logs = logpdf.sum(axis=1)
         print("BEST=", logs.max())
-        return logpdf, logs/1000
+        return logpdf, logs
 
     def expected_pose(self, particles):
         y_mean_image, x_mean_image, _ = np.mean(particles, axis=0)
@@ -138,6 +139,7 @@ class MCL:
         new_scan = np.roll(new_scan, -90)  # account for laser mounting.
         predictions = self.predictions(self.map_image, self.particles)
         _, logprobs = self.prediction_prob(predictions, new_scan[np.newaxis, :])
+        logprobs = logprobs/1000
         probs = np.exp(logprobs)
         probs = probs/probs.sum()
         self.particles = self.resample_particles(self.particles, probs)
@@ -156,11 +158,12 @@ class MCL:
         new_particles[:, 2] += .1 * np.random.normal(size=(self.num_particles))
         predictions = self.predictions(self.map_image, new_particles)
         _, new_logprobs = self.prediction_prob(predictions, new_scan[np.newaxis, :])
-        change = (new_logprobs > old_logprobs)*1
+        acceptance_prob = np.clip(np.exp(new_logprobs - old_logprobs), a_min=None, a_max=1.0)
+        change = bernoulli.rvs(acceptance_prob)
         change_3 = np.stack((change,) * 3, axis=1)
         self.particles = self.particles.copy()*(1-change_3) + new_particles*change_3
         lprobs = old_logprobs.copy()*(1-change) + new_logprobs*change
-        probs = np.exp(lprobs*10)
+        probs = np.exp(lprobs/100)
         probs = probs/probs.sum()
         resampled_particles = self.resample_particles(self.particles, probs)
         pose, pose_uncertainty = self.expected_pose(resampled_particles[:self.replacement])
