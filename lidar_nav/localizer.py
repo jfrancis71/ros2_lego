@@ -169,7 +169,7 @@ class MCL:
         pose, pose_uncertainty = self.expected_pose(resampled_particles[:self.replacement])
         mean_predictions = self.predictions(self.map_image, np.array([[pose[1], pose[0], pose[2]]]))
         logs, _ = self.prediction_prob(mean_predictions, new_scan[np.newaxis, :])
-        return pose, pose_uncertainty, mean_predictions[0], logs[0]
+        return pose, pose_uncertainty, mean_predictions[0], logs[0], resampled_particles
 
 
 class LocalizerNode(Node):
@@ -193,6 +193,8 @@ class LocalizerNode(Node):
             self.create_publisher(LaserScan, "/pdf", 1)
         self.particles_publisher = \
             self.create_publisher(PointCloud2, "/particles", 1)
+        self.particles_resampled_publisher = \
+            self.create_publisher(PointCloud2, "/metropolis_particles", 1)
         self.marker_loc_uncertainty_publisher = self.create_publisher(Marker, 'loc_uncertainty', 1)
         self.marker_pdf_publisher = self.create_publisher(Marker, '/pdf_marker', 1)
         self.angle_uncertainty_publisher = self.create_publisher(Marker, 'angle_uncertainty', 1)
@@ -293,6 +295,16 @@ class LocalizerNode(Node):
         cloud_msg = point_cloud2.create_cloud_xyz32(cloud_msg_header, points)
         self.particles_publisher.publish(cloud_msg)
 
+    def publish_resamples_point_cloud(self, header, particles):
+        points = np.zeros([self.localizer.replacement, 3])
+        points[:, 0] = particles[:self.localizer.replacement, 1]*self.localizer.resolution + self.localizer.origin[0]
+        points[:, 1] = (self.localizer.map_height-particles[:self.localizer.replacement, 0])*self.localizer.resolution + self.localizer.origin[1]
+        cloud_msg_header = Header()
+        cloud_msg_header.stamp = header.stamp
+        cloud_msg_header.frame_id = "map"
+        cloud_msg = point_cloud2.create_cloud_xyz32(cloud_msg_header, points)
+        self.particles_resampled_publisher.publish(cloud_msg)
+
     def publish_loc_uncertainty_marker(self, header, pose, pose_uncertainty):
         marker = Marker()
         marker.header.stamp = header.stamp
@@ -376,8 +388,9 @@ class LocalizerNode(Node):
         print("Updating...")
         self.init_phase += 1
         if self.init_phase < 50:
-            pose, pose_uncertainty, predictions, log_prob = self.localizer.lost(scan)
+            pose, pose_uncertainty, predictions, log_prob, resampled_particles = self.localizer.lost(scan)
             self.publish_ros2(lidar_msg.header, base_link_to_odom_transform, pose, pose_uncertainty, self.localizer.particles, predictions, log_prob)
+            self.publish_resamples_point_cloud(lidar_msg.header, resampled_particles)
             return
         old_pose = self.ros2_to_pose(self.old_transform)
         new_pose = self.ros2_to_pose(odom_to_base_link_transform)
