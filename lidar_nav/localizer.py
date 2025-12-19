@@ -15,6 +15,7 @@ from sensor_msgs_py import point_cloud2
 from visualization_msgs.msg import Marker
 from geometry_msgs.msg import Point
 from geometry_msgs.msg import TransformStamped
+from geometry_msgs.msg import PoseWithCovarianceStamped
 from tf2_ros import TransformBroadcaster
 # Current StaticTransformBroadcaster is broken, we need to use from rolling.
 # clone git clone https://github.com/ros2/geometry2.git
@@ -67,6 +68,13 @@ class MCL:
         # coord_map has shape [self.num_angles, self.num_radius, 1, 2]
         self.coord_map = np.transpose(c, axes=(1, 2, 0))[:, :, np.newaxis, :]
         self.ndi_mode = _to_ndimage_mode('constant')
+
+    def init(self, x, y, angle):
+        print("X=", x)
+        self.particles[:, 1] = (x - self.origin[0])/self.resolution
+        self.particles[:, 0] = self.map_height - (y - self.origin[1])/self.resolution
+        self.particles[:, 2] = angle
+#        y_mean_map = (self.map_height-y_mean_image)*self.resolution + self.origin[1]
 
     def update_motion_particles(self, old_odom_pose, new_odom_pose):
         #p.136 Probabilistic Robotics
@@ -187,6 +195,11 @@ class LocalizerNode(Node):
             "/scan",
             self.lidar_callback,
             1)
+        self.initialpose_subscription = self.create_subscription(
+            PoseWithCovarianceStamped,
+            "/initialpose",
+            self.initialpose_callback,
+            1)
         self.pred_publisher = \
             self.create_publisher(LaserScan, "/pred_laser", 1)
         self.pdf_publisher = \
@@ -210,6 +223,8 @@ class LocalizerNode(Node):
         self.old_transform = None
         self.tf_static_broadcaster = StaticTransformBroadcaster(self)
         self.init_phase = 0
+        self.diff_t = 0.03
+        self.diff_angle = .08
 
     def send_map_base_link_transform(self, base_link_to_odom_tf, pose):
         try:
@@ -359,6 +374,14 @@ class LocalizerNode(Node):
         self.publish_pdf_marker(header)
         self.publish_angle_uncertainty_marker(header, pose_uncertainty)
 
+    def initialpose_callback(self, initialpose_msg):
+        print("Received initial pose ", initialpose_msg)
+        self.init_phase = 1
+        r_t = initialpose_msg.pose.pose.orientation
+        rot = [r_t.x, r_t.y, r_t.z, r_t.w]
+        _, _, theta = euler_from_quaternion(rot)
+        self.localizer.init(initialpose_msg.pose.pose.position.x, initialpose_msg.pose.pose.position.y, theta)
+
     def lidar_callback(self, lidar_msg):
         scan = np.array(lidar_msg.ranges)
         try:
@@ -385,16 +408,20 @@ class LocalizerNode(Node):
         if delay > .1:
             print("DELAY ", delay)
             return
-        print("Updating...")
-        self.init_phase += 1
-        if self.init_phase < 50:
-            pose, pose_uncertainty, predictions, log_prob, resampled_particles = self.localizer.lost(scan)
-            self.publish_ros2(lidar_msg.header, base_link_to_odom_transform, pose, pose_uncertainty, self.localizer.particles, predictions, log_prob)
-            self.publish_resamples_point_cloud(lidar_msg.header, resampled_particles)
+        if self.init_phase == 0:
             return
-        old_pose = self.ros2_to_pose(self.old_transform)
-        new_pose = self.ros2_to_pose(odom_to_base_link_transform)
-        self.localizer.update_motion_particles(old_pose, new_pose)
+        old_odom_pose = self.ros2_to_pose(self.old_transform)
+        new_odom_pose = self.ros2_to_pose(odom_to_base_link_transform)
+        self.localizer.update_motion_particles(old_odom_pose, new_odom_pose)
+        diff_x = new_odom_pose[0] - old_odom_pose[0]
+        diff_y = new_odom_pose[1] - old_odom_pose[1]
+        d_trans = np.sqrt(diff_y**2 + diff_x**2)
+        abs_diff_angle = np.abs(new_odom_pose[2] - old_odom_pose[2])
+        diff_angle = np.min(np.array([abs_diff_angle, 2*np.pi - abs_diff_angle]))
+        abs_diff = np.abs(diff_angle)
+        if abs_diff < self.diff_angle and d_trans < self.diff_t:
+            return
+        print("Updating...")
         pose, pose_uncertainty, predictions, log_prob = self.localizer.update_lidar_particles(scan)
         self.publish_ros2(lidar_msg.header, base_link_to_odom_transform, pose, pose_uncertainty, self.localizer.particles, predictions, log_prob)
         self.old_transform = odom_to_base_link_transform
