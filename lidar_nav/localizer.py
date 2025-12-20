@@ -147,7 +147,7 @@ class MCL:
         new_scan = np.roll(new_scan, -90)  # account for laser mounting.
         predictions = self.predictions(self.map_image, self.particles)
         _, logprobs = self.prediction_prob(predictions, new_scan[np.newaxis, :])
-        logprobs = logprobs/1000
+        logprobs = logprobs/100
         probs = np.exp(logprobs)
         probs = probs/probs.sum()
         if update:
@@ -156,29 +156,6 @@ class MCL:
         mean_predictions = self.predictions(self.map_image, np.array([[pose[1], pose[0], pose[2]]]))
         logs, _ = self.prediction_prob(mean_predictions, new_scan[np.newaxis, :])
         return pose, pose_uncertainty, mean_predictions[0], logs[0]
-
-    def lost(self, scan):
-        new_scan = skimage.transform.resize(scan.astype(np.float32), (self.num_angles,))
-        new_scan = np.roll(new_scan, -90)  # account for laser mounting.
-        predictions = self.predictions(self.map_image, self.particles)
-        _, old_logprobs = self.prediction_prob(predictions, new_scan[np.newaxis, :])
-        new_particles = self.particles.copy()
-        new_particles[:, :2] += 1 * np.random.normal(size=(self.num_particles, 2))
-        new_particles[:, 2] += .1 * np.random.normal(size=(self.num_particles))
-        predictions = self.predictions(self.map_image, new_particles)
-        _, new_logprobs = self.prediction_prob(predictions, new_scan[np.newaxis, :])
-        acceptance_prob = np.clip(np.exp(new_logprobs - old_logprobs), a_min=None, a_max=1.0)
-        change = bernoulli.rvs(acceptance_prob)
-        change_3 = np.stack((change,) * 3, axis=1)
-        self.particles = self.particles.copy()*(1-change_3) + new_particles*change_3
-        lprobs = old_logprobs.copy()*(1-change) + new_logprobs*change
-        probs = np.exp(lprobs/100)
-        probs = probs/probs.sum()
-        resampled_particles = self.resample_particles(self.particles, probs)
-        pose, pose_uncertainty = self.expected_pose(resampled_particles[:self.replacement])
-        mean_predictions = self.predictions(self.map_image, np.array([[pose[1], pose[0], pose[2]]]))
-        logs, _ = self.prediction_prob(mean_predictions, new_scan[np.newaxis, :])
-        return pose, pose_uncertainty, mean_predictions[0], logs[0], resampled_particles
 
 
 class LocalizerNode(Node):
