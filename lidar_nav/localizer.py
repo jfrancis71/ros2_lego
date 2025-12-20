@@ -45,13 +45,14 @@ class MCL:
         self.map_image = map_image
         self.origin = origin
         self.resolution = resolution
-        self.map_height = map_image.shape[0]
-        self.map_width = map_image.shape[1]
         self.num_particles = 500
         self.replacement = 400
         self.num_angles = 360  # Number of buckets in our angle quantization
         self.max_radius = 100  # Maximum radius in pixels that we make predictions over.
-        self.particles = np.transpose(np.array([ self.map_height*np.random.random(size=self.num_particles), self.map_width*np.random.random(size=self.num_particles), 2 * np.pi * np.random.random(size=self.num_particles) ]))
+        self.map_image_height = map_image.shape[0]
+        self.map_width = map_image.shape[1] * self.resolution
+        self.map_height = map_image.shape[0] * self.resolution
+        self.particles = np.transpose(np.array([ self.origin[0] + self.map_width*np.random.random(size=self.num_particles), self.origin[1] + self.map_height*np.random.random(size=self.num_particles), 2 * np.pi * np.random.random(size=self.num_particles) ]))
         # Particles are row, col, theta (theta is ROS2 convention)
         height = self.num_angles
         k_radius = 100 / 100
@@ -71,8 +72,8 @@ class MCL:
 
     def init(self, x, y, angle):
         print("X=", x)
-        self.particles[:, 1] = (x - self.origin[0])/self.resolution
-        self.particles[:, 0] = self.map_height - (y - self.origin[1])/self.resolution
+        self.particles[:, 0] = x
+        self.particles[:, 1] = y
         self.particles[:, 2] = angle
 #        y_mean_map = (self.map_height-y_mean_image)*self.resolution + self.origin[1]
 
@@ -80,7 +81,7 @@ class MCL:
         #p.136 Probabilistic Robotics
         alpha1 = 0.15  # this is different from book, ignoring d_rot1
                       # Just using angle diffs, better for holonomic
-        alpha3 = 0.1
+        alpha3 = 0.05
         diff_x = new_odom_pose[0] - old_odom_pose[0]
         diff_y = new_odom_pose[1] - old_odom_pose[1]
         d_rot1 = np.arctan2(diff_y, diff_x) - old_odom_pose[2]
@@ -91,13 +92,16 @@ class MCL:
         sample_d_rot1 = d_rot1 + np.random.normal(size=self.num_particles)*diff_angle*alpha1
         sample_d_trans = d_trans + np.random.normal(size=self.num_particles)*d_trans*alpha3
         sample_d_rot2 = d_rot2 + np.random.normal(size=self.num_particles)*diff_angle*alpha1
-        self.particles[:, 1] += sample_d_trans * np.cos(self.particles[:, 2] + sample_d_rot1)/self.resolution
-        self.particles[:, 0] -= sample_d_trans * np.sin(self.particles[:, 2] + sample_d_rot1)/self.resolution
+        self.particles[:, 0] += sample_d_trans * np.cos(self.particles[:, 2] + sample_d_rot1)
+        self.particles[:, 1] += sample_d_trans * np.sin(self.particles[:, 2] + sample_d_rot1)
         self.particles[:, 2] += sample_d_rot1 + sample_d_rot2
 
     def predictions(self, map_image, particles):
         image = map_image==0
-        trans_coords = np.transpose(self.coord_map + particles[:, :2], axes=(3,2,0,1))
+        image_coord = np.zeros_like(particles)
+        image_coord[:, 0] = self.map_image_height - (particles[:, 1] - self.origin[1])/self.resolution
+        image_coord[:, 1] = (particles[:, 0] - self.origin[0])/self.resolution
+        trans_coords = np.transpose(self.coord_map +image_coord[:, :2], axes=(3,2,0,1))
         polar_coord_predictions = ndi.map_coordinates(image, trans_coords, prefilter=False, mode=self.ndi_mode, order=0, cval=0.0)
         skimage.transform._warps._clip_warp_output(image, polar_coord_predictions, 'constant', 0.0, True)
         polar_coords = np.argmax(polar_coord_predictions, axis=2)*self.resolution
@@ -112,7 +116,7 @@ class MCL:
         new_particles[:self.replacement, :2] = particles[ls][:, :2]
         new_particles[:self.replacement, 2] = particles[ls][:, 2]
         kidnap_particles = self.num_particles - self.replacement
-        new_particles[self.replacement:] = np.transpose(np.array([ self.map_height*np.random.random(size=kidnap_particles), self.map_width*np.random.random(size=kidnap_particles), 2 * np.pi * np.random.random(size=kidnap_particles) ]))
+        new_particles[self.replacement:] = np.transpose(np.array([ self.map_width*np.random.random(size=kidnap_particles), self.map_height*np.random.random(size=kidnap_particles), 2 * np.pi * np.random.random(size=kidnap_particles) ]))
         return new_particles
 
     def prediction_prob(self, predictions, scan_line):
@@ -132,15 +136,11 @@ class MCL:
         return logpdf, logs
 
     def expected_pose(self, particles):
-        y_mean_image, x_mean_image, _ = np.mean(particles, axis=0)
-        y_std_image, x_std_image, _ = np.std(particles, axis=0)
+        x_mean, y_mean, _ = np.mean(particles, axis=0)
+        y_std, x_std, _ = np.std(particles, axis=0)
         kappa, angle, _ = vonmises.fit(particles[:, 2], fscale=1)
         angle_std = 1/np.sqrt(kappa)
-        x_mean_map = x_mean_image*self.resolution + self.origin[0]
-        y_mean_map = (self.map_height-y_mean_image)*self.resolution + self.origin[1]
-        x_std_map = x_std_image*self.resolution
-        y_std_map = y_std_image*self.resolution
-        return (x_mean_map, y_mean_map, angle), (x_std_map, y_std_map, angle_std)
+        return (x_mean, y_mean, angle), (x_std, y_std, angle_std)
 
     def update_lidar_particles(self, scan, update):
         new_scan = skimage.transform.resize(scan.astype(np.float32), (self.num_angles,))
@@ -263,8 +263,8 @@ class LocalizerNode(Node):
     def publish_point_cloud(self, header, pose, particles):
         map_points = np.zeros([self.localizer.replacement, 3])
         new_pose = np.zeros([3])
-        map_points[:, 0] = particles[:self.localizer.replacement, 1]*self.localizer.resolution + self.localizer.origin[0]
-        map_points[:, 1] = (self.localizer.map_height-particles[:self.localizer.replacement, 0])*self.localizer.resolution + self.localizer.origin[1]
+        map_points[:, 0] = particles[:self.localizer.replacement, 0]
+        map_points[:, 1] = particles[:self.localizer.replacement, 1]
         new_pose[:2] = pose[:2]
         points = map_points - new_pose
         rot_points = np.zeros([400, 3])
