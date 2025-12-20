@@ -142,7 +142,7 @@ class MCL:
         y_std_map = y_std_image*self.resolution
         return (x_mean_map, y_mean_map, angle), (x_std_map, y_std_map, angle_std)
 
-    def update_lidar_particles(self, scan):
+    def update_lidar_particles(self, scan, update):
         new_scan = skimage.transform.resize(scan.astype(np.float32), (self.num_angles,))
         new_scan = np.roll(new_scan, -90)  # account for laser mounting.
         predictions = self.predictions(self.map_image, self.particles)
@@ -150,7 +150,8 @@ class MCL:
         logprobs = logprobs/1000
         probs = np.exp(logprobs)
         probs = probs/probs.sum()
-        self.particles = self.resample_particles(self.particles, probs)
+        if update:
+            self.particles = self.resample_particles(self.particles, probs)
         pose, pose_uncertainty = self.expected_pose(self.particles[:self.replacement])
         mean_predictions = self.predictions(self.map_image, np.array([[pose[1], pose[0], pose[2]]]))
         logs, _ = self.prediction_prob(mean_predictions, new_scan[np.newaxis, :])
@@ -204,12 +205,10 @@ class LocalizerNode(Node):
             self.create_publisher(LaserScan, "/pred_laser", 1)
         self.pdf_publisher = \
             self.create_publisher(LaserScan, "/pdf", 1)
-        self.particles_publisher = \
-            self.create_publisher(PointCloud2, "/particles", 1)
         self.particles_resampled_publisher = \
             self.create_publisher(PointCloud2, "/metropolis_particles", 1)
         self.marker_loc_uncertainty_publisher = self.create_publisher(Marker, 'loc_uncertainty', 1)
-        self.marker_pdf_publisher = self.create_publisher(Marker, '/pdf_marker', 1)
+        self.marker_pdf_publisher = self.create_publisher(Marker, '/particles_marker', 1)
         self.angle_uncertainty_publisher = self.create_publisher(Marker, 'angle_uncertainty', 1)
         self.tf_buffer = Buffer()
         qos = QoSProfile(
@@ -284,31 +283,38 @@ class LocalizerNode(Node):
         lidar_msg1.header = header
         self.pdf_publisher.publish(lidar_msg1)
 
-    def publish_pdf_marker(self, header):
+    def publish_point_cloud(self, header, pose, particles):
+        map_points = np.zeros([self.localizer.replacement, 3])
+        new_pose = np.zeros([3])
+        map_points[:, 0] = particles[:self.localizer.replacement, 1]*self.localizer.resolution + self.localizer.origin[0]
+        map_points[:, 1] = (self.localizer.map_height-particles[:self.localizer.replacement, 0])*self.localizer.resolution + self.localizer.origin[1]
+        new_pose[:2] = pose[:2]
+        points = map_points - new_pose
+        rot_points = np.zeros([400, 3])
+        rot_points[:, 0] = points[:, 0] * np.cos(-pose[2]) - points[:, 1] * np.sin(-pose[2])
+        rot_points[:, 1] = points[:, 0] * np.sin(-pose[2]) + points[:, 1] * np.cos(-pose[2])
         marker = Marker()
         marker.header.stamp = header.stamp
         marker.header.frame_id = "base_link"
         marker.ns = "basic_shapes"
         marker.id = 0
-        marker.type = Marker.CYLINDER
+        marker.type = Marker.POINTS
         marker.action = Marker.ADD
         marker.pose.position.x, marker.pose.position.y, marker.pose.position.z = 0.0, 0.0, 0.0
         marker.pose.orientation.x, marker.pose.orientation.y, marker.pose.orientation.z = 0.0, 0.0, 0.0
         marker.pose.orientation.w = 1.0
-        marker.scale.x, marker.scale.y, marker.scale.z = 4.0, 4.0, 0.5
-        marker.color.r, marker.color.g, marker.color.b, marker.color.a = 0.3, 0.0, 1.0, .2
+        marker.scale.x, marker.scale.y, marker.scale.z = 0.03, 0.03, 0.05
+        marker.color.r, marker.color.g, marker.color.b, marker.color.a = 0.3, 1.0, 1.0, .2
+        points_list = []
+        for l in range(rot_points.shape[0]):
+            p = Point()
+            p.x = rot_points[l, 0].item()
+            p.y = rot_points[l, 1].item()
+            p.z = 0.0
+            points_list.append(p)
+        marker.points = points_list
         marker.frame_locked = True
         self.marker_pdf_publisher.publish(marker)
-
-    def publish_point_cloud(self, header, particles):
-        points = np.zeros([self.localizer.replacement, 3])
-        points[:, 0] = particles[:self.localizer.replacement, 1]*self.localizer.resolution + self.localizer.origin[0]
-        points[:, 1] = (self.localizer.map_height-particles[:self.localizer.replacement, 0])*self.localizer.resolution + self.localizer.origin[1]
-        cloud_msg_header = Header()
-        cloud_msg_header.stamp = header.stamp
-        cloud_msg_header.frame_id = "map"
-        cloud_msg = point_cloud2.create_cloud_xyz32(cloud_msg_header, points)
-        self.particles_publisher.publish(cloud_msg)
 
     def publish_resamples_point_cloud(self, header, particles):
         points = np.zeros([self.localizer.replacement, 3])
@@ -369,13 +375,11 @@ class LocalizerNode(Node):
         self.send_map_base_link_transform(base_link_to_odom_transform, pose)
         self.publish_lidar_prediction(header, predictions)
         self.publish_pdf(header, log_prob)
-        self.publish_point_cloud(header, particles)
+        self.publish_point_cloud(header, pose, particles)
         self.publish_loc_uncertainty_marker(header, pose, pose_uncertainty)
-        self.publish_pdf_marker(header)
         self.publish_angle_uncertainty_marker(header, pose_uncertainty)
 
     def initialpose_callback(self, initialpose_msg):
-        print("Received initial pose ", initialpose_msg)
         self.init_phase = 1
         r_t = initialpose_msg.pose.pose.orientation
         rot = [r_t.x, r_t.y, r_t.z, r_t.w]
@@ -419,10 +423,10 @@ class LocalizerNode(Node):
         abs_diff_angle = np.abs(new_odom_pose[2] - old_odom_pose[2])
         diff_angle = np.min(np.array([abs_diff_angle, 2*np.pi - abs_diff_angle]))
         abs_diff = np.abs(diff_angle)
+        update = True
         if abs_diff < self.diff_angle and d_trans < self.diff_t:
-            return
-        print("Updating...")
-        pose, pose_uncertainty, predictions, log_prob = self.localizer.update_lidar_particles(scan)
+            update = False
+        pose, pose_uncertainty, predictions, log_prob = self.localizer.update_lidar_particles(scan, update)
         self.publish_ros2(lidar_msg.header, base_link_to_odom_transform, pose, pose_uncertainty, self.localizer.particles, predictions, log_prob)
         self.old_transform = odom_to_base_link_transform
 
