@@ -42,7 +42,7 @@ import scipy
 
 class MCL:
     def __init__(self, map_image, origin, resolution):
-        self.map_image = map_image
+        self.map_image = (map_image == 0)
         self.origin = origin
         self.resolution = resolution
         self.num_particles = 500
@@ -53,7 +53,6 @@ class MCL:
         self.map_width = map_image.shape[1] * self.resolution
         self.map_height = map_image.shape[0] * self.resolution
         self.particles = np.transpose(np.array([ self.origin[0] + self.map_width*np.random.random(size=self.num_particles), self.origin[1] + self.map_height*np.random.random(size=self.num_particles), 2 * np.pi * np.random.random(size=self.num_particles) ]))
-        # Particles are row, col, theta (theta is ROS2 convention)
         height = self.num_angles
         k_radius = 100 / 100
         k_angle = height / (2 * np.pi)
@@ -71,11 +70,9 @@ class MCL:
         self.ndi_mode = _to_ndimage_mode('constant')
 
     def init(self, x, y, angle):
-        print("X=", x)
         self.particles[:, 0] = x
         self.particles[:, 1] = y
         self.particles[:, 2] = angle
-#        y_mean_map = (self.map_height-y_mean_image)*self.resolution + self.origin[1]
 
     def update_motion_particles(self, old_odom_pose, new_odom_pose):
         #p.136 Probabilistic Robotics
@@ -96,14 +93,13 @@ class MCL:
         self.particles[:, 1] += sample_d_trans * np.sin(self.particles[:, 2] + sample_d_rot1)
         self.particles[:, 2] += sample_d_rot1 + sample_d_rot2
 
-    def predictions(self, map_image, particles):
-        image = map_image==0
+    def predictions(self, particles):
         image_coord = np.zeros_like(particles)
         image_coord[:, 0] = self.map_image_height - (particles[:, 1] - self.origin[1])/self.resolution
         image_coord[:, 1] = (particles[:, 0] - self.origin[0])/self.resolution
         trans_coords = np.transpose(self.coord_map +image_coord[:, :2], axes=(3,2,0,1))
-        polar_coord_predictions = ndi.map_coordinates(image, trans_coords, prefilter=False, mode=self.ndi_mode, order=0, cval=0.0)
-        skimage.transform._warps._clip_warp_output(image, polar_coord_predictions, 'constant', 0.0, True)
+        polar_coord_predictions = ndi.map_coordinates(self.map_image, trans_coords, prefilter=False, mode=self.ndi_mode, order=0, cval=0.0)
+        skimage.transform._warps._clip_warp_output(self.map_image, polar_coord_predictions, 'constant', 0.0, True)
         polar_coords = np.argmax(polar_coord_predictions, axis=2)*self.resolution
         out_of_range = np.where(np.max(polar_coord_predictions, axis=2)==0)
         polar_coords[out_of_range] = -1
@@ -145,7 +141,7 @@ class MCL:
     def update_lidar_particles(self, scan, update):
         new_scan = skimage.transform.resize(scan.astype(np.float32), (self.num_angles,))
         new_scan = np.roll(new_scan, -90)  # account for laser mounting.
-        predictions = self.predictions(self.map_image, self.particles)
+        predictions = self.predictions(self.particles)
         _, logprobs = self.prediction_prob(predictions, new_scan[np.newaxis, :])
         logprobs = logprobs/100
         probs = np.exp(logprobs)
@@ -153,7 +149,7 @@ class MCL:
         if update:
             self.particles = self.resample_particles(self.particles, probs)
         pose, pose_uncertainty = self.expected_pose(self.particles[:self.replacement])
-        mean_predictions = self.predictions(self.map_image, np.array([[pose[1], pose[0], pose[2]]]))
+        mean_predictions = self.predictions(np.array([[pose[1], pose[0], pose[2]]]))
         logs, _ = self.prediction_prob(mean_predictions, new_scan[np.newaxis, :])
         return pose, pose_uncertainty, mean_predictions[0], logs[0]
 
