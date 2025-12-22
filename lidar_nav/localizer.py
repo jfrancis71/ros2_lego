@@ -138,7 +138,7 @@ class MCL:
         angle_std = 1/np.sqrt(kappa)
         return (x_mean, y_mean, angle), (x_std, y_std, angle_std)
 
-    def update_lidar_particles(self, scan, update):
+    def update_lidar_particles(self, scan):
         new_scan = skimage.transform.resize(scan.astype(np.float32), (self.num_angles,))
         new_scan = np.roll(new_scan, -90)  # account for laser mounting.
         predictions = self.predictions(self.particles)
@@ -146,12 +146,7 @@ class MCL:
         logprobs = logprobs/100
         probs = np.exp(logprobs)
         probs = probs/probs.sum()
-        if update:
-            self.particles = self.resample_particles(self.particles, probs)
-        pose, pose_uncertainty = self.expected_pose(self.particles[:self.replacement])
-        mean_predictions = self.predictions(np.array([[pose[1], pose[0], pose[2]]]))
-        logs, _ = self.prediction_prob(mean_predictions, new_scan[np.newaxis, :])
-        return pose, pose_uncertainty, mean_predictions[0], logs[0]
+        self.particles = self.resample_particles(self.particles, probs)
 
 
 class LocalizerNode(Node):
@@ -396,11 +391,15 @@ class LocalizerNode(Node):
         abs_diff_angle = np.abs(new_odom_pose[2] - old_odom_pose[2])
         diff_angle = np.min(np.array([abs_diff_angle, 2*np.pi - abs_diff_angle]))
         abs_diff = np.abs(diff_angle)
-        update = True
-        if abs_diff < self.diff_angle and d_trans < self.diff_t:
-            update = False
-        pose, pose_uncertainty, predictions, log_prob = self.localizer.update_lidar_particles(scan, update)
-        self.publish_ros2(lidar_msg.header, base_link_to_odom_transform, pose, pose_uncertainty, self.localizer.particles, predictions, log_prob)
+        if abs_diff > self.diff_angle or d_trans > self.diff_t:
+            print("Update scan")
+            self.localizer.update_lidar_particles(scan)
+        pose, pose_uncertainty = self.localizer.expected_pose(self.localizer.particles[:self.localizer.replacement])
+        mean_predictions = self.localizer.predictions(np.array([[pose[1], pose[0], pose[2]]]))
+        new_scan = skimage.transform.resize(scan.astype(np.float32), (self.localizer.num_angles,))
+        new_scan = np.roll(new_scan, -90)  # account for laser mounting.
+        logs, log_prob = self.localizer.prediction_prob(mean_predictions, new_scan[np.newaxis, :])
+        self.publish_ros2(lidar_msg.header, base_link_to_odom_transform, pose, pose_uncertainty, self.localizer.particles, mean_predictions[0], log_prob)
         self.old_transform = odom_to_base_link_transform
 
 
