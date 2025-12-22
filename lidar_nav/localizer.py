@@ -399,7 +399,7 @@ class LocalizerNode(Node):
         new_scan = skimage.transform.resize(scan.astype(np.float32), (self.localizer.num_angles,))
         new_scan = np.roll(new_scan, -90)  # account for laser mounting.
         logs, log_prob = self.localizer.prediction_prob(mean_predictions, new_scan[np.newaxis, :])
-        self.publish_ros2(lidar_msg.header, base_link_to_odom_transform, pose, pose_uncertainty, self.localizer.particles, mean_predictions[0], log_prob)
+        self.publish_ros2(lidar_msg.header, base_link_to_odom_transform, pose, pose_uncertainty, self.localizer.particles, mean_predictions[0], logs[0])
         self.old_transform = odom_to_base_link_transform
 
 
