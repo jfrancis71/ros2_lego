@@ -395,7 +395,7 @@ class LocalizerNode(Node):
             print("Update scan")
             self.localizer.update_lidar_particles(scan)
         pose, pose_uncertainty = self.localizer.expected_pose(self.localizer.particles[:self.localizer.replacement])
-        mean_predictions = self.localizer.predictions(np.array([[pose[1], pose[0], pose[2]]]))
+        mean_predictions = self.localizer.predictions(np.array([[pose[0], pose[1], pose[2]]]))
         new_scan = skimage.transform.resize(scan.astype(np.float32), (self.localizer.num_angles,))
         new_scan = np.roll(new_scan, -90)  # account for laser mounting.
         logs, log_prob = self.localizer.prediction_prob(mean_predictions, new_scan[np.newaxis, :])
