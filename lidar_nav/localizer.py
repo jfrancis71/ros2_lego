@@ -53,7 +53,7 @@ class MCL:
         self.map_width = map_image.shape[1] * self.resolution
         self.map_height = map_image.shape[0] * self.resolution
         # Particles are with respect to laser orientation
-        self.particles = np.transpose(np.array([ self.origin[0] + self.map_width*np.random.random(size=self.num_particles), self.origin[1] + self.map_height*np.random.random(size=self.num_particles), 2 * np.pi * np.random.random(size=self.num_particles) ]))
+        self.particles = None
         height = self.num_angles
         k_radius = 100 / 100
         k_angle = height / (2 * np.pi)
@@ -70,7 +70,8 @@ class MCL:
         self.coord_map = np.transpose(c, axes=(1, 2, 0))[:, :, np.newaxis, :]
         self.ndi_mode = _to_ndimage_mode('constant')
 
-    def init(self, x, y, angle):
+    def initial_pose(self, x, y, angle):
+        self.particles = np.zeros([self.num_particles, 3])
         self.particles[:, 0] = x
         self.particles[:, 1] = y
         self.particles[:, 2] = angle
@@ -149,7 +150,7 @@ class MCL:
         self.particles = self.resample_particles(self.particles, probs)
 
 
-class LocalizerNode(Node):
+class MCLNode(Node):
     def __init__(self):
         super().__init__("localizer")
         self.declare_parameter('map', 'my_house.yaml')
@@ -173,9 +174,7 @@ class LocalizerNode(Node):
             self.create_publisher(LaserScan, "/pred_laser", 1)
         self.pdf_publisher = \
             self.create_publisher(LaserScan, "/pdf", 1)
-        self.marker_loc_uncertainty_publisher = self.create_publisher(Marker, 'loc_uncertainty', 1)
         self.marker_pdf_publisher = self.create_publisher(Marker, '/particles_marker', 1)
-        self.angle_uncertainty_publisher = self.create_publisher(Marker, 'angle_uncertainty', 1)
         self.tf_buffer = Buffer()
         qos = QoSProfile(
             depth=1,
@@ -187,7 +186,7 @@ class LocalizerNode(Node):
         self.localizer = MCL(map, origin, resolution)
         self.old_transform = None
         self.tf_static_broadcaster = StaticTransformBroadcaster(self)
-        self.init_phase = 0
+        self.initial_pose_received = False
         self.diff_t = 0.03
         self.diff_angle = .08
 
@@ -276,44 +275,6 @@ class LocalizerNode(Node):
         marker.frame_locked = True
         self.marker_pdf_publisher.publish(marker)
 
-    def publish_loc_uncertainty_marker(self, stamp, pose, pose_uncertainty):
-        marker = Marker()
-        marker.header.stamp = stamp
-        marker.header.frame_id = "base_link"
-        marker.ns = "basic_shapes"
-        marker.id = 0
-        marker.type = Marker.CYLINDER
-        marker.action = Marker.ADD
-        marker.pose.position.x, marker.pose.position.y, marker.pose.position.z = 0.0, 0.0, 0.0
-        marker.pose.orientation.x, marker.pose.orientation.y, marker.pose.orientation.z = 0.0, 0.0, 0.0
-        marker.pose.orientation.w = 1.0
-        marker.scale.x, marker.scale.y, marker.scale.z = pose_uncertainty[0], pose_uncertainty[1], 0.5
-        marker.color.r, marker.color.g, marker.color.b, marker.color.a = 0.0, 0.0, 1.0, .2
-        marker.frame_locked = True
-        self.marker_loc_uncertainty_publisher.publish(marker)
-
-    def publish_angle_uncertainty_marker(self, stamp, pose_uncertainty):
-        marker = Marker()
-        marker.header.stamp = stamp
-        marker.header.frame_id = "base_link"
-        marker.ns = "basic"
-        marker.id = 0
-        marker.type = Marker.LINE_LIST
-        marker.action = Marker.ADD
-
-        marker.scale.x, marker.scale.y, marker.scale.z = .1, .1, .1
-        marker.color.r, marker.color.g, marker.color.b, marker.color.a = 0.0, 0.0, 1.0, 1.0
-        mstd_angle = np.min((pose_uncertainty[2], np.pi))
-        point1 = Point()
-        point1.x, point1.y, point1.z = 0.0, 0.0, 0.1
-        point2 = Point()
-        point2.x, point2.y, point2.z = 0.0 + .5*np.cos(-mstd_angle), 0.0 + .5*np.sin(-mstd_angle), 0.1
-        point3 = Point()
-        point3.x, point3.y, point3.z = 0.0 + .5*np.cos(+mstd_angle), 0.0 + .5*np.sin(+mstd_angle), 0.1
-        marker.points = [point1, point2, point1, point3]
-        marker.frame_locked = True
-        self.angle_uncertainty_publisher.publish(marker)
-
     def ros2_to_pose(self, odom_transform):
         t = odom_transform.transform.translation
         r_t = odom_transform.transform.rotation
@@ -326,8 +287,6 @@ class LocalizerNode(Node):
         self.publish_lidar_prediction(header.stamp, predictions)
         self.publish_pdf(header.stamp, log_prob)
         self.publish_point_cloud(header.stamp, pose, particles)
-        self.publish_loc_uncertainty_marker(header.stamp, pose, pose_uncertainty)
-        self.publish_angle_uncertainty_marker(header.stamp, pose_uncertainty)
 
     def initialpose_callback(self, initialpose_msg):
         try:
@@ -338,15 +297,17 @@ class LocalizerNode(Node):
         except TransformException as ex:
             print("No Transform for base_link to base_laser, initial pose not set.")
             return
-        self.init_phase = 1
+        self.initial_pose_received = True
         r_t = initialpose_msg.pose.pose.orientation
         rot = [r_t.x, r_t.y, r_t.z, r_t.w]
         _, _, theta_laser = euler_from_quaternion(rot)
         # I am assuming here that laser and base_link just differ by orientation
         _, _, theta_diff = self.ros2_to_pose(base_link_to_base_laser_transform)
-        self.localizer.init(initialpose_msg.pose.pose.position.x, initialpose_msg.pose.pose.position.y, theta_laser + theta_diff)
+        self.localizer.initial_pose(initialpose_msg.pose.pose.position.x, initialpose_msg.pose.pose.position.y, theta_laser + theta_diff)
 
     def lidar_callback(self, lidar_msg):
+        if not self.initial_pose_received:
+            return
         scan = np.array(lidar_msg.ranges)
         try:
             base_laser_to_odom_transform = self.tf_buffer.lookup_transform(
@@ -372,8 +333,6 @@ class LocalizerNode(Node):
         if delay > .1:
             print("DELAY ", delay)
             return
-        if self.init_phase == 0:
-            return
         old_odom_pose = self.ros2_to_pose(self.old_transform)
         new_odom_pose = self.ros2_to_pose(odom_to_base_laser_transform)
         self.localizer.update_motion_particles(old_odom_pose, new_odom_pose)
@@ -389,14 +348,13 @@ class LocalizerNode(Node):
         pose, pose_uncertainty = self.localizer.expected_pose(self.localizer.particles[:self.localizer.replacement])
         mean_predictions = self.localizer.predictions(np.array([[pose[0], pose[1], pose[2]]]))
         new_scan = skimage.transform.resize(scan.astype(np.float32), (self.localizer.num_angles,))
-        new_scan = new_scan
         logs, log_prob = self.localizer.prediction_prob(mean_predictions, new_scan[np.newaxis, :])
         self.publish_ros2(lidar_msg.header, base_laser_to_odom_transform, pose, pose_uncertainty, self.localizer.particles, mean_predictions[0], logs[0])
         self.old_transform = odom_to_base_laser_transform
 
 
 rclpy.init()
-localizer_node = LocalizerNode()
-rclpy.spin(localizer_node)
-localizer_node.destroy_node()
+mcl_node = MCLNode()
+rclpy.spin(mcl_node)
+mcl_node.destroy_node()
 rclpy.shutdown()
