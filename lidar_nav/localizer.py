@@ -3,46 +3,36 @@ import copy
 import itertools
 import os
 import yaml
-import skimage
 import numpy as np
+import scipy
 from scipy.linalg import circulant
+from scipy import ndimage as ndi
+from scipy.stats import bernoulli, uniform, norm, vonmises
+import skimage
+from skimage._shared.utils import _to_ndimage_mode
+from skimage._shared.utils import convert_to_float
 import rclpy
 from rclpy.node import Node
+from rclpy.time import Time
+from rclpy.qos import QoSProfile, DurabilityPolicy, HistoryPolicy
 from std_msgs.msg import Header 
-from sensor_msgs.msg import LaserScan
-from sensor_msgs.msg import PointCloud2
+from sensor_msgs.msg import LaserScan, PointCloud2
 from sensor_msgs_py import point_cloud2
 from visualization_msgs.msg import Marker
-from geometry_msgs.msg import Point
-from geometry_msgs.msg import TransformStamped
-from geometry_msgs.msg import PoseWithCovarianceStamped
-from tf2_ros import TransformBroadcaster
+from geometry_msgs.msg import Point, TransformStamped, PoseWithCovarianceStamped
+from tf2_ros.transform_listener import TransformListener
 # Current StaticTransformBroadcaster is broken, we need to use from rolling.
 # clone git clone https://github.com/ros2/geometry2.git
 # Prepend ./src/geometry2/tf2_ros_py/tf2_ros to PYTHONPATH and export
 from static_transform_broadcaster import StaticTransformBroadcaster
-from tf_transformations import quaternion_from_euler
-from tf_transformations import euler_from_quaternion
+from tf2_ros import TransformBroadcaster
+from tf_transformations import euler_from_quaternion, quaternion_from_euler
 from tf2_ros.buffer import Buffer
-from tf2_ros.transform_listener import TransformListener
-from rclpy.qos import QoSProfile
-from rclpy.qos import DurabilityPolicy
-from rclpy.qos import HistoryPolicy
-from tf2_ros import TransformException
-from rclpy.time import Time
-from scipy import ndimage as ndi
-from skimage._shared.utils import _to_ndimage_mode
-from skimage._shared.utils import convert_to_float
-from scipy.stats import vonmises
-from scipy.stats import norm
-from scipy.stats import uniform
-from scipy.stats import bernoulli
-import scipy
 
 
 class MCL:
     def __init__(self, map_image, origin, resolution):
-        self.map_image = (map_image == 0)
+        self.map_image = (map_image == 0)  # binarize the image
         self.origin = origin
         self.resolution = resolution
         self.num_particles = 500
@@ -52,8 +42,7 @@ class MCL:
         self.map_image_height = map_image.shape[0]
         self.map_width = map_image.shape[1] * self.resolution
         self.map_height = map_image.shape[0] * self.resolution
-        # Particles are with respect to laser orientation
-        self.particles = None
+        self.particles = None #  Particles are with respect to laser orientation
         height = self.num_angles
         k_radius = 100 / 100
         k_angle = height / (2 * np.pi)
@@ -76,7 +65,14 @@ class MCL:
         self.particles[:, 1] = y
         self.particles[:, 2] = angle
 
-    def update_motion_particles(self, old_odom_pose, new_odom_pose):
+    def expected_pose(self, particles):
+        x_mean, y_mean, _ = np.mean(particles, axis=0)
+        y_std, x_std, _ = np.std(particles, axis=0)
+        kappa, angle, _ = vonmises.fit(particles[:, 2], fscale=1)
+        angle_std = 1/np.sqrt(kappa)
+        return (x_mean, y_mean, angle), (x_std, y_std, angle_std)
+
+    def update_particles_odom(self, old_odom_pose, new_odom_pose):
         #p.136 Probabilistic Robotics
         alpha1 = 0.15  # this is different from book, ignoring d_rot1
                       # Just using angle diffs, better for holonomic
@@ -95,7 +91,31 @@ class MCL:
         self.particles[:, 1] += sample_d_trans * np.sin(self.particles[:, 2] + sample_d_rot1)
         self.particles[:, 2] += sample_d_rot1 + sample_d_rot2
 
-    def predictions(self, particles):
+    def update_particles_lidar(self, scan):
+        new_scan = skimage.transform.resize(scan.astype(np.float32), (self.num_angles,))
+        predictions = self.range_predictions(self.particles)
+        logprobs_ranges = self.logprob_range_prediction(predictions, new_scan[np.newaxis, :])
+        logprobs = logprobs_ranges.sum(axis=1)
+        logprobs = logprobs/100
+        probs = np.exp(logprobs)
+        probs = probs/probs.sum()
+        self.particles = self.resample_particles(self.particles, probs)
+
+    def logprob_range_prediction(self, predictions, scan_line):
+        predictions = predictions.copy()
+        pdf = norm.logpdf(scan_line, loc=predictions, scale=.1)
+        out_range = uniform.logpdf(scan_line, loc=predictions*0.0 + 5.0, scale=20.0)
+        wh = np.where(predictions<-.5)
+        pdf[wh] = out_range[wh]
+        noise = uniform.logpdf(scan_line, loc=predictions*0.0 + 0.0, scale=25.0) + np.log(.01)
+        isnan = np.isnan(scan_line)
+        valid = (1-isnan)
+        stack = np.stack([pdf, noise])
+        new_pdf = scipy.special.logsumexp(stack, axis=0)
+        logpdf = np.nan_to_num(new_pdf) - 0 * isnan
+        return logpdf
+
+    def range_predictions(self, particles):
         image_coord = np.zeros_like(particles)
         image_coord[:, 0] = self.map_image_height - (particles[:, 1] - self.origin[1])/self.resolution
         image_coord[:, 1] = (particles[:, 0] - self.origin[0])/self.resolution
@@ -117,42 +137,10 @@ class MCL:
         new_particles[self.replacement:] = np.transpose(np.array([ self.map_width*np.random.random(size=kidnap_particles), self.map_height*np.random.random(size=kidnap_particles), 2 * np.pi * np.random.random(size=kidnap_particles) ]))
         return new_particles
 
-    def prediction_prob(self, predictions, scan_line):
-        predictions = predictions.copy()
-        pdf = norm.logpdf(scan_line, loc=predictions, scale=.1)
-        out_range = uniform.logpdf(scan_line, loc=predictions*0.0 + 5.0, scale=20.0)
-        wh = np.where(predictions<-.5)
-        pdf[wh] = out_range[wh]
-        noise = uniform.logpdf(scan_line, loc=predictions*0.0 + 0.0, scale=25.0) + np.log(.01)
-        isnan = np.isnan(scan_line)
-        valid = (1-isnan)
-        stack = np.stack([pdf, noise])
-        new_pdf = scipy.special.logsumexp(stack, axis=0)
-        logpdf = np.nan_to_num(new_pdf) - 0 * isnan
-        logs = logpdf.sum(axis=1)
-        print("BEST=", logs.max())
-        return logpdf, logs
-
-    def expected_pose(self, particles):
-        x_mean, y_mean, _ = np.mean(particles, axis=0)
-        y_std, x_std, _ = np.std(particles, axis=0)
-        kappa, angle, _ = vonmises.fit(particles[:, 2], fscale=1)
-        angle_std = 1/np.sqrt(kappa)
-        return (x_mean, y_mean, angle), (x_std, y_std, angle_std)
-
-    def update_lidar_particles(self, scan):
-        new_scan = skimage.transform.resize(scan.astype(np.float32), (self.num_angles,))
-        predictions = self.predictions(self.particles)
-        _, logprobs = self.prediction_prob(predictions, new_scan[np.newaxis, :])
-        logprobs = logprobs/100
-        probs = np.exp(logprobs)
-        probs = probs/probs.sum()
-        self.particles = self.resample_particles(self.particles, probs)
-
 
 class MCLNode(Node):
     def __init__(self):
-        super().__init__("localizer")
+        super().__init__("mcl_node")
         self.declare_parameter('map', 'my_house.yaml')
         self.map_file = self.get_parameter('map').get_parameter_value().string_value
         with open(self.map_file, 'r') as map_file:
@@ -304,6 +292,7 @@ class MCLNode(Node):
         # I am assuming here that laser and base_link just differ by orientation
         _, _, theta_diff = self.ros2_to_pose(base_link_to_base_laser_transform)
         self.localizer.initial_pose(initialpose_msg.pose.pose.position.x, initialpose_msg.pose.pose.position.y, theta_laser + theta_diff)
+        print("Initial pose set.")
 
     def lidar_callback(self, lidar_msg):
         if not self.initial_pose_received:
@@ -335,7 +324,7 @@ class MCLNode(Node):
             return
         old_odom_pose = self.ros2_to_pose(self.old_transform)
         new_odom_pose = self.ros2_to_pose(odom_to_base_laser_transform)
-        self.localizer.update_motion_particles(old_odom_pose, new_odom_pose)
+        self.localizer.update_particles_odom(old_odom_pose, new_odom_pose)
         diff_x = new_odom_pose[0] - old_odom_pose[0]
         diff_y = new_odom_pose[1] - old_odom_pose[1]
         d_trans = np.sqrt(diff_y**2 + diff_x**2)
@@ -343,13 +332,12 @@ class MCLNode(Node):
         diff_angle = np.min(np.array([abs_diff_angle, 2*np.pi - abs_diff_angle]))
         abs_diff = np.abs(diff_angle)
         if abs_diff > self.diff_angle or d_trans > self.diff_t:
-            print("Update scan")
-            self.localizer.update_lidar_particles(scan)
+            self.localizer.update_particles_lidar(scan)
         pose, pose_uncertainty = self.localizer.expected_pose(self.localizer.particles[:self.localizer.replacement])
-        mean_predictions = self.localizer.predictions(np.array([[pose[0], pose[1], pose[2]]]))
+        mean_predictions = self.localizer.range_predictions(np.array([[pose[0], pose[1], pose[2]]]))
         new_scan = skimage.transform.resize(scan.astype(np.float32), (self.localizer.num_angles,))
-        logs, log_prob = self.localizer.prediction_prob(mean_predictions, new_scan[np.newaxis, :])
-        self.publish_ros2(lidar_msg.header, base_laser_to_odom_transform, pose, pose_uncertainty, self.localizer.particles, mean_predictions[0], logs[0])
+        logprob_ranges = self.localizer.logprob_range_prediction(mean_predictions, new_scan[np.newaxis, :])
+        self.publish_ros2(lidar_msg.header, base_laser_to_odom_transform, pose, pose_uncertainty, self.localizer.particles, mean_predictions[0], logprob_ranges[0])
         self.old_transform = odom_to_base_laser_transform
 
 
