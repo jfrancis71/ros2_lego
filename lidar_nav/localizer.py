@@ -52,6 +52,7 @@ class MCL:
         self.map_image_height = map_image.shape[0]
         self.map_width = map_image.shape[1] * self.resolution
         self.map_height = map_image.shape[0] * self.resolution
+        # Particles are with respect to laser orientation
         self.particles = np.transpose(np.array([ self.origin[0] + self.map_width*np.random.random(size=self.num_particles), self.origin[1] + self.map_height*np.random.random(size=self.num_particles), 2 * np.pi * np.random.random(size=self.num_particles) ]))
         height = self.num_angles
         k_radius = 100 / 100
@@ -140,7 +141,6 @@ class MCL:
 
     def update_lidar_particles(self, scan):
         new_scan = skimage.transform.resize(scan.astype(np.float32), (self.num_angles,))
-        new_scan = np.roll(new_scan, -90)  # account for laser mounting.
         predictions = self.predictions(self.particles)
         _, logprobs = self.prediction_prob(predictions, new_scan[np.newaxis, :])
         logprobs = logprobs/100
@@ -173,8 +173,6 @@ class LocalizerNode(Node):
             self.create_publisher(LaserScan, "/pred_laser", 1)
         self.pdf_publisher = \
             self.create_publisher(LaserScan, "/pdf", 1)
-        self.particles_resampled_publisher = \
-            self.create_publisher(PointCloud2, "/metropolis_particles", 1)
         self.marker_loc_uncertainty_publisher = self.create_publisher(Marker, 'loc_uncertainty', 1)
         self.marker_pdf_publisher = self.create_publisher(Marker, '/particles_marker', 1)
         self.angle_uncertainty_publisher = self.create_publisher(Marker, 'angle_uncertainty', 1)
@@ -193,20 +191,12 @@ class LocalizerNode(Node):
         self.diff_t = 0.03
         self.diff_angle = .08
 
-    def send_map_base_link_transform(self, base_link_to_odom_tf, pose):
-        try:
-            base_laser_to_base_link_tf = self.tf_buffer.lookup_transform(
-                "base_laser",
-                "base_link",
-                rclpy.time.Time())
-        except TransformException as ex:
-            print("No Transform")
-            return
+    def send_map_base_laser_transform(self, base_laser_to_odom_tf, pose):
         zero_to_odom_tf = TransformStamped()
         zero_to_odom_tf.header.stamp = self.get_clock().now().to_msg()
         zero_to_odom_tf.header.frame_id = 'zero'
         zero_to_odom_tf.child_frame_id = 'odom'
-        zero_to_odom_tf.transform = base_link_to_odom_tf.transform
+        zero_to_odom_tf.transform = base_laser_to_odom_tf.transform
         map_to_zero_tf = TransformStamped()
         map_to_zero_tf.header.stamp = \
             self.get_clock().now().to_msg()
@@ -226,7 +216,7 @@ class LocalizerNode(Node):
 
     def publish_lidar_prediction(self, stamp, ranges):
         lidar_msg1 = LaserScan()
-        lidar_msg1.ranges = np.roll(ranges, 90)  # Account for laser mounting
+        lidar_msg1.ranges = ranges
         lidar_msg1.angle_min = 0.0
         lidar_msg1.angle_max = 6.28318548
         lidar_msg1.angle_increment = 2 * np.pi / 360
@@ -241,7 +231,7 @@ class LocalizerNode(Node):
     def publish_pdf(self, stamp, pdf):
         lidar_msg1 = LaserScan()
         remap = -np.tanh(pdf)+2
-        lidar_msg1.ranges = np.roll(remap, 90)  # Account for laser mounting
+        lidar_msg1.ranges = remap
         lidar_msg1.angle_min = 0.0
         lidar_msg1.angle_max = 6.28318548
         lidar_msg1.angle_increment = 2 * np.pi / 360
@@ -265,7 +255,7 @@ class LocalizerNode(Node):
         rot_points[:, 1] = points[:, 0] * np.sin(-pose[2]) + points[:, 1] * np.cos(-pose[2])
         marker = Marker()
         marker.header.stamp = stamp
-        marker.header.frame_id = "base_link"
+        marker.header.frame_id = "base_laser"
         marker.ns = "basic_shapes"
         marker.id = 0
         marker.type = Marker.POINTS
@@ -332,7 +322,7 @@ class LocalizerNode(Node):
         return (t.x, t.y, theta)
 
     def publish_ros2(self, header, base_link_to_odom_transform, pose, pose_uncertainty, particles, predictions, log_prob):
-        self.send_map_base_link_transform(base_link_to_odom_transform, pose)
+        self.send_map_base_laser_transform(base_link_to_odom_transform, pose)
         self.publish_lidar_prediction(header.stamp, predictions)
         self.publish_pdf(header.stamp, log_prob)
         self.publish_point_cloud(header.stamp, pose, particles)
@@ -340,34 +330,44 @@ class LocalizerNode(Node):
         self.publish_angle_uncertainty_marker(header.stamp, pose_uncertainty)
 
     def initialpose_callback(self, initialpose_msg):
+        try:
+            base_link_to_base_laser_transform = self.tf_buffer.lookup_transform(
+                "base_link",
+                "base_laser",
+                rclpy.time.Time())
+        except TransformException as ex:
+            print("No Transform for base_link to base_laser, initial pose not set.")
+            return
         self.init_phase = 1
         r_t = initialpose_msg.pose.pose.orientation
         rot = [r_t.x, r_t.y, r_t.z, r_t.w]
-        _, _, theta = euler_from_quaternion(rot)
-        self.localizer.init(initialpose_msg.pose.pose.position.x, initialpose_msg.pose.pose.position.y, theta)
+        _, _, theta_laser = euler_from_quaternion(rot)
+        # I am assuming here that laser and base_link just differ by orientation
+        _, _, theta_diff = self.ros2_to_pose(base_link_to_base_laser_transform)
+        self.localizer.init(initialpose_msg.pose.pose.position.x, initialpose_msg.pose.pose.position.y, theta_laser + theta_diff)
 
     def lidar_callback(self, lidar_msg):
         scan = np.array(lidar_msg.ranges)
         try:
-            base_link_to_odom_transform = self.tf_buffer.lookup_transform(
-                "base_link",
+            base_laser_to_odom_transform = self.tf_buffer.lookup_transform(
+                "base_laser",
                 "odom",
                 rclpy.time.Time())
         except TransformException as ex:
             print("No Transform")
             return
         try:
-            odom_to_base_link_transform = self.tf_buffer.lookup_transform(
+            odom_to_base_laser_transform = self.tf_buffer.lookup_transform(
                 "odom",
-                "base_link",
+                "base_laser",
                 rclpy.time.Time())
         except TransformException as ex:
             print("No Transform")
             return
         if self.old_transform is None:
-            self.old_transform = odom_to_base_link_transform
+            self.old_transform = odom_to_base_laser_transform
         lidar_msg_time = Time.from_msg(lidar_msg.header.stamp)
-        odom_base_tf_time = Time.from_msg(odom_to_base_link_transform.header.stamp)
+        odom_base_tf_time = Time.from_msg(odom_to_base_laser_transform.header.stamp)
         delay = (lidar_msg_time-odom_base_tf_time).nanoseconds*1e-9
         if delay > .1:
             print("DELAY ", delay)
@@ -375,7 +375,7 @@ class LocalizerNode(Node):
         if self.init_phase == 0:
             return
         old_odom_pose = self.ros2_to_pose(self.old_transform)
-        new_odom_pose = self.ros2_to_pose(odom_to_base_link_transform)
+        new_odom_pose = self.ros2_to_pose(odom_to_base_laser_transform)
         self.localizer.update_motion_particles(old_odom_pose, new_odom_pose)
         diff_x = new_odom_pose[0] - old_odom_pose[0]
         diff_y = new_odom_pose[1] - old_odom_pose[1]
@@ -389,10 +389,10 @@ class LocalizerNode(Node):
         pose, pose_uncertainty = self.localizer.expected_pose(self.localizer.particles[:self.localizer.replacement])
         mean_predictions = self.localizer.predictions(np.array([[pose[0], pose[1], pose[2]]]))
         new_scan = skimage.transform.resize(scan.astype(np.float32), (self.localizer.num_angles,))
-        new_scan = np.roll(new_scan, -90)  # account for laser mounting.
+        new_scan = new_scan
         logs, log_prob = self.localizer.prediction_prob(mean_predictions, new_scan[np.newaxis, :])
-        self.publish_ros2(lidar_msg.header, base_link_to_odom_transform, pose, pose_uncertainty, self.localizer.particles, mean_predictions[0], logs[0])
-        self.old_transform = odom_to_base_link_transform
+        self.publish_ros2(lidar_msg.header, base_laser_to_odom_transform, pose, pose_uncertainty, self.localizer.particles, mean_predictions[0], logs[0])
+        self.old_transform = odom_to_base_laser_transform
 
 
 rclpy.init()
