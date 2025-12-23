@@ -224,7 +224,7 @@ class LocalizerNode(Node):
         map_to_zero_tf.transform.rotation.w = q[3]
         self.tf_static_broadcaster.sendTransform([zero_to_odom_tf, map_to_zero_tf])
 
-    def publish_lidar_prediction(self, header, ranges):
+    def publish_lidar_prediction(self, stamp, ranges):
         lidar_msg1 = LaserScan()
         lidar_msg1.ranges = np.roll(ranges, 90)  # Account for laser mounting
         lidar_msg1.angle_min = 0.0
@@ -234,10 +234,11 @@ class LocalizerNode(Node):
         lidar_msg1.scan_time = 0.10004401206970215
         lidar_msg1.range_min = 0.019999999552965164
         lidar_msg1.range_max = 25.0
-        lidar_msg1.header = header
+        lidar_msg1.header.stamp = stamp
+        lidar_msg1.header.frame_id = "base_laser"
         self.pred_publisher.publish(lidar_msg1)
 
-    def publish_pdf(self, header, pdf):
+    def publish_pdf(self, stamp, pdf):
         lidar_msg1 = LaserScan()
         remap = -np.tanh(pdf)+2
         lidar_msg1.ranges = np.roll(remap, 90)  # Account for laser mounting
@@ -248,10 +249,11 @@ class LocalizerNode(Node):
         lidar_msg1.scan_time = 0.10004401206970215
         lidar_msg1.range_min = 0.019999999552965164
         lidar_msg1.range_max = 25.0
-        lidar_msg1.header = header
+        lidar_msg1.header.stamp = stamp
+        lidar_msg1.header.frame_id = "base_laser"
         self.pdf_publisher.publish(lidar_msg1)
 
-    def publish_point_cloud(self, header, pose, particles):
+    def publish_point_cloud(self, stamp, pose, particles):
         map_points = np.zeros([self.localizer.replacement, 3])
         new_pose = np.zeros([3])
         map_points[:, 0] = particles[:self.localizer.replacement, 0]
@@ -262,7 +264,7 @@ class LocalizerNode(Node):
         rot_points[:, 0] = points[:, 0] * np.cos(-pose[2]) - points[:, 1] * np.sin(-pose[2])
         rot_points[:, 1] = points[:, 0] * np.sin(-pose[2]) + points[:, 1] * np.cos(-pose[2])
         marker = Marker()
-        marker.header.stamp = header.stamp
+        marker.header.stamp = stamp
         marker.header.frame_id = "base_link"
         marker.ns = "basic_shapes"
         marker.id = 0
@@ -284,19 +286,9 @@ class LocalizerNode(Node):
         marker.frame_locked = True
         self.marker_pdf_publisher.publish(marker)
 
-    def publish_resamples_point_cloud(self, header, particles):
-        points = np.zeros([self.localizer.replacement, 3])
-        points[:, 0] = particles[:self.localizer.replacement, 1]*self.localizer.resolution + self.localizer.origin[0]
-        points[:, 1] = (self.localizer.map_height-particles[:self.localizer.replacement, 0])*self.localizer.resolution + self.localizer.origin[1]
-        cloud_msg_header = Header()
-        cloud_msg_header.stamp = header.stamp
-        cloud_msg_header.frame_id = "map"
-        cloud_msg = point_cloud2.create_cloud_xyz32(cloud_msg_header, points)
-        self.particles_resampled_publisher.publish(cloud_msg)
-
-    def publish_loc_uncertainty_marker(self, header, pose, pose_uncertainty):
+    def publish_loc_uncertainty_marker(self, stamp, pose, pose_uncertainty):
         marker = Marker()
-        marker.header.stamp = header.stamp
+        marker.header.stamp = stamp
         marker.header.frame_id = "base_link"
         marker.ns = "basic_shapes"
         marker.id = 0
@@ -310,9 +302,9 @@ class LocalizerNode(Node):
         marker.frame_locked = True
         self.marker_loc_uncertainty_publisher.publish(marker)
 
-    def publish_angle_uncertainty_marker(self, header, pose_uncertainty):
+    def publish_angle_uncertainty_marker(self, stamp, pose_uncertainty):
         marker = Marker()
-        marker.header.stamp = header.stamp
+        marker.header.stamp = stamp
         marker.header.frame_id = "base_link"
         marker.ns = "basic"
         marker.id = 0
@@ -341,11 +333,11 @@ class LocalizerNode(Node):
 
     def publish_ros2(self, header, base_link_to_odom_transform, pose, pose_uncertainty, particles, predictions, log_prob):
         self.send_map_base_link_transform(base_link_to_odom_transform, pose)
-        self.publish_lidar_prediction(header, predictions)
-        self.publish_pdf(header, log_prob)
-        self.publish_point_cloud(header, pose, particles)
-        self.publish_loc_uncertainty_marker(header, pose, pose_uncertainty)
-        self.publish_angle_uncertainty_marker(header, pose_uncertainty)
+        self.publish_lidar_prediction(header.stamp, predictions)
+        self.publish_pdf(header.stamp, log_prob)
+        self.publish_point_cloud(header.stamp, pose, particles)
+        self.publish_loc_uncertainty_marker(header.stamp, pose, pose_uncertainty)
+        self.publish_angle_uncertainty_marker(header.stamp, pose_uncertainty)
 
     def initialpose_callback(self, initialpose_msg):
         self.init_phase = 1
