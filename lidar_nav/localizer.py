@@ -173,6 +173,7 @@ class MCLNode(Node):
         map = skimage.io.imread(os.path.join(os.path.split(self.map_file)[0], image_filename))
         self.localizer = MCL(map, origin, resolution)
         self.old_transform = None
+        self.last_lidar_update_transform = None
         self.tf_static_broadcaster = StaticTransformBroadcaster(self)
         self.initial_pose_received = False
         self.diff_t = 0.03
@@ -316,6 +317,7 @@ class MCLNode(Node):
             return
         if self.old_transform is None:
             self.old_transform = odom_to_base_laser_transform
+            self.last_lidar_update_transform = odom_to_base_laser_transform
         lidar_msg_time = Time.from_msg(lidar_msg.header.stamp)
         odom_base_tf_time = Time.from_msg(odom_to_base_laser_transform.header.stamp)
         delay = (lidar_msg_time-odom_base_tf_time).nanoseconds*1e-9
@@ -325,14 +327,17 @@ class MCLNode(Node):
         old_odom_pose = self.ros2_to_pose(self.old_transform)
         new_odom_pose = self.ros2_to_pose(odom_to_base_laser_transform)
         self.localizer.update_particles_odom(old_odom_pose, new_odom_pose)
-        diff_x = new_odom_pose[0] - old_odom_pose[0]
-        diff_y = new_odom_pose[1] - old_odom_pose[1]
+        last_lidar_update_pose = self.ros2_to_pose(self.last_lidar_update_transform)
+        diff_x = new_odom_pose[0] - last_lidar_update_pose[0]
+        diff_y = new_odom_pose[1] - last_lidar_update_pose[1]
         d_trans = np.sqrt(diff_y**2 + diff_x**2)
-        abs_diff_angle = np.abs(new_odom_pose[2] - old_odom_pose[2])
+        abs_diff_angle = np.abs(new_odom_pose[2] - last_lidar_update_pose[2])
         diff_angle = np.min(np.array([abs_diff_angle, 2*np.pi - abs_diff_angle]))
         abs_diff = np.abs(diff_angle)
         if abs_diff > self.diff_angle or d_trans > self.diff_t:
             self.localizer.update_particles_lidar(scan)
+            self.last_lidar_update_transform = odom_to_base_laser_transform
+        time.sleep(.2)  # This helps with "future transform" error. Why?
         pose, pose_uncertainty = self.localizer.expected_pose(self.localizer.particles[:self.localizer.replacement])
         mean_predictions = self.localizer.range_predictions(np.array([[pose[0], pose[1], pose[2]]]))
         new_scan = skimage.transform.resize(scan.astype(np.float32), (self.localizer.num_angles,))
