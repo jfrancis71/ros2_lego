@@ -148,6 +148,14 @@ class MCLNode(Node):
             image_filename = map_properties['image']
             origin = map_properties['origin']
             resolution = map_properties["resolution"]
+        map = skimage.io.imread(os.path.join(os.path.split(self.map_file)[0], image_filename))
+        self.localizer = MCL(map, origin, resolution)
+        self.old_transform = None
+        self.last_lidar_update_transform = None
+        self.tf_static_broadcaster = StaticTransformBroadcaster(self)
+        self.initial_pose_received = False
+        self.diff_t = 0.03
+        self.diff_angle = .08
         self.lidar_subscription = self.create_subscription(
             LaserScan,
             "/scan",
@@ -170,14 +178,6 @@ class MCLNode(Node):
             history=HistoryPolicy.KEEP_LAST,
             )
         self.tf_listener = TransformListener(self.tf_buffer, self, spin_thread=True, qos=qos)
-        map = skimage.io.imread(os.path.join(os.path.split(self.map_file)[0], image_filename))
-        self.localizer = MCL(map, origin, resolution)
-        self.old_transform = None
-        self.last_lidar_update_transform = None
-        self.tf_static_broadcaster = StaticTransformBroadcaster(self)
-        self.initial_pose_received = False
-        self.diff_t = 0.03
-        self.diff_angle = .08
 
     def send_map_base_laser_transform(self, base_laser_to_odom_tf, pose):
         zero_to_odom_tf = TransformStamped()
@@ -186,20 +186,14 @@ class MCLNode(Node):
         zero_to_odom_tf.child_frame_id = 'odom'
         zero_to_odom_tf.transform = base_laser_to_odom_tf.transform
         map_to_zero_tf = TransformStamped()
-        map_to_zero_tf.header.stamp = \
-            self.get_clock().now().to_msg()
+        map_to_zero_tf.header.stamp = self.get_clock().now().to_msg()
         map_to_zero_tf.header.frame_id = 'map'
         map_to_zero_tf.child_frame_id = 'zero'
-        map_to_zero_tf.transform.translation.x = \
-            pose[0]
-        map_to_zero_tf.transform.translation.y = \
-            pose[1]
-        map_to_zero_tf.transform.translation.z = 0.0
+        m_to_z_tf_trans = map_to_zero_tf.transform.translation
+        m_to_z_tf_trans.x, m_to_z_tf_trans.y, m_to_z_tf_trans.z = pose[0], pose[1], 0.0
         q = quaternion_from_euler(0, 0, pose[2])
-        map_to_zero_tf.transform.rotation.x = q[0]
-        map_to_zero_tf.transform.rotation.y = q[1]
-        map_to_zero_tf.transform.rotation.z = q[2]
-        map_to_zero_tf.transform.rotation.w = q[3]
+        m_to_z_tf_rot = map_to_zero_tf.transform.rotation
+        m_to_z_tf_rot.x, m_to_z_tf_rot.y, m_to_z_tf_rot.z, m_to_z_tf_rot.w = q[0], q[1], q[2], q[3]
         self.tf_static_broadcaster.sendTransform([zero_to_odom_tf, map_to_zero_tf])
 
     def publish_lidar_prediction(self, stamp, ranges):
@@ -218,8 +212,8 @@ class MCLNode(Node):
 
     def publish_pdf(self, stamp, pdf):
         lidar_msg1 = LaserScan()
-        remap = -np.tanh(pdf)+2
-        lidar_msg1.ranges = remap
+        squashed_pdf = -np.tanh(pdf)+2
+        lidar_msg1.ranges = squashed_pdf
         lidar_msg1.angle_min = 0.0
         lidar_msg1.angle_max = 6.28318548
         lidar_msg1.angle_increment = 2 * np.pi / 360
@@ -256,20 +250,18 @@ class MCLNode(Node):
         points_list = []
         for l in range(rot_points.shape[0]):
             p = Point()
-            p.x = rot_points[l, 0].item()
-            p.y = rot_points[l, 1].item()
-            p.z = 0.0
+            p.x, p.y, p.z = rot_points[l, 0].item(), rot_points[l, 1].item(), 0.0
             points_list.append(p)
         marker.points = points_list
         marker.frame_locked = True
         self.marker_pdf_publisher.publish(marker)
 
     def ros2_to_pose(self, odom_transform):
-        t = odom_transform.transform.translation
-        r_t = odom_transform.transform.rotation
-        rot = [r_t.x, r_t.y, r_t.z, r_t.w]
+        trans_tf = odom_transform.transform.translation
+        rot_tf = odom_transform.transform.rotation
+        rot = [rot_tf.x, rot_tf.y, rot_tf.z, rot_tf.w]
         _, _, theta = euler_from_quaternion(rot)
-        return (t.x, t.y, theta)
+        return (trans_tf.x, trans_tf.y, theta)
 
     def publish_ros2(self, header, base_link_to_odom_transform, pose, pose_uncertainty, particles, predictions, log_prob):
         self.send_map_base_laser_transform(base_link_to_odom_transform, pose)
@@ -304,16 +296,12 @@ class MCLNode(Node):
                 "base_laser",
                 "odom",
                 rclpy.time.Time())
-        except TransformException as ex:
-            print("No Transform")
-            return
-        try:
             odom_to_base_laser_transform = self.tf_buffer.lookup_transform(
                 "odom",
                 "base_laser",
                 rclpy.time.Time())
         except TransformException as ex:
-            print("No Transform")
+            print("No base laser to odom Transform")
             return
         if self.old_transform is None:
             self.old_transform = odom_to_base_laser_transform
