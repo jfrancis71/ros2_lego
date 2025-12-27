@@ -46,24 +46,23 @@ class MCL:
         height = self.num_angles
         k_radius = 100 / 100
         k_angle = height / (2 * np.pi)
-        def coord_map_fn(output_coords):
+        def polar_map_fn(output_coords):
             angle = output_coords[:, 1] / k_angle
             rr = ((output_coords[:, 0] / k_radius) * np.sin(angle))
             cc = ((output_coords[:, 0] / k_radius) * np.cos(angle))
             coords = np.column_stack((cc, rr))
             return coords
-        c = skimage.transform.warp_coords(coord_map_fn, (self.num_angles, self.max_radius))
+        polar_map = skimage.transform.warp_coords(polar_map_fn, (self.num_angles, self.max_radius))
         # The last column gives (x,y) coordinates in our image grid of point
         # using polar coordinates from the first two indices.
         # coord_map has shape [self.num_angles, self.num_radius, 1, 2]
-        self.coord_map = np.transpose(c, axes=(1, 2, 0))[:, :, np.newaxis, :]
+        # The dim 1 in 2nd from last above is for fast broadcast with particles
+        self.polar_map = np.transpose(polar_map, axes=(1, 2, 0))[:, :, np.newaxis, :]
         self.ndi_mode = _to_ndimage_mode('constant')
 
     def initial_pose(self, x, y, angle):
-        self.particles = np.zeros([self.num_particles, 3])
-        self.particles[:, 0] = x
-        self.particles[:, 1] = y
-        self.particles[:, 2] = angle
+        self.particles = np.tile(
+            np.array([x, y, angle]), reps=(self.num_particles, 1))
 
     def expected_pose(self, particles):
         x_mean, y_mean, _ = np.mean(particles, axis=0)
@@ -119,8 +118,8 @@ class MCL:
         image_coord = np.zeros_like(particles)
         image_coord[:, 0] = self.map_image_height - (particles[:, 1] - self.origin[1])/self.resolution
         image_coord[:, 1] = (particles[:, 0] - self.origin[0])/self.resolution
-        trans_coords = np.transpose(self.coord_map +image_coord[:, :2], axes=(3,2,0,1))
-        polar_coord_predictions = ndi.map_coordinates(self.map_image, trans_coords, prefilter=False, mode=self.ndi_mode, order=0, cval=0.0)
+        map_coords = np.transpose(self.polar_map + image_coord[:, :2], axes=(3,2,0,1))
+        polar_coord_predictions = ndi.map_coordinates(self.map_image, map_coords, prefilter=False, mode=self.ndi_mode, order=0, cval=0.0)
         skimage.transform._warps._clip_warp_output(self.map_image, polar_coord_predictions, 'constant', 0.0, True)
         polar_coords = np.argmax(polar_coord_predictions, axis=2)*self.resolution
         out_of_range = np.where(np.max(polar_coord_predictions, axis=2)==0)
