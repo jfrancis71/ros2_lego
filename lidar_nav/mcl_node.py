@@ -39,6 +39,7 @@ class MCL:
         self.replacement = 400
         self.num_angles = 360  # Number of buckets in our angle quantization
         self.max_radius = 100  # Maximum radius in pixels that we make predictions over.
+        self.correlation_log_prob_factor = 100.0
         self.map_image_height = map_image.shape[0]
         self.map_width = map_image.shape[1] * self.resolution
         self.map_height = map_image.shape[0] * self.resolution
@@ -55,7 +56,7 @@ class MCL:
         polar_map = skimage.transform.warp_coords(polar_map_fn, (self.num_angles, self.max_radius))
         # The last column gives (x,y) coordinates in our image grid of point
         # using polar coordinates from the first two indices.
-        # coord_map has shape [self.num_angles, self.num_radius, 1, 2]
+        # polar_map has shape [self.num_angles, self.num_radius, 1, 2]
         # The dim 1 in 2nd from last above is for fast broadcast with particles
         self.polar_map = np.transpose(polar_map, axes=(1, 2, 0))[:, :, np.newaxis, :]
         self.ndi_mode = _to_ndimage_mode('constant')
@@ -71,17 +72,17 @@ class MCL:
         angle_std = 1/np.sqrt(kappa)
         return (x_mean, y_mean, angle), (x_std, y_std, angle_std)
 
-    def update_particles_odom(self, old_odom_pose, new_odom_pose):
+    def update_particles_odom(self, previous_odom_pose, current_odom_pose):
         #p.136 Probabilistic Robotics
         alpha1 = 0.15  # this is different from book, ignoring d_rot1
                       # Just using angle diffs, better for holonomic
         alpha3 = 0.05
-        diff_x = new_odom_pose[0] - old_odom_pose[0]
-        diff_y = new_odom_pose[1] - old_odom_pose[1]
-        d_rot1 = np.arctan2(diff_y, diff_x) - old_odom_pose[2]
+        diff_x = current_odom_pose[0] - previous_odom_pose[0]
+        diff_y = current_odom_pose[1] - previous_odom_pose[1]
+        d_rot1 = np.arctan2(diff_y, diff_x) - previous_odom_pose[2]
         d_trans = np.sqrt(diff_y**2 + diff_x**2)
-        d_rot2 = new_odom_pose[2] - old_odom_pose[2] - d_rot1
-        abs_diff_angle = np.abs(new_odom_pose[2] - old_odom_pose[2])
+        d_rot2 = current_odom_pose[2] - previous_odom_pose[2] - d_rot1
+        abs_diff_angle = np.abs(current_odom_pose[2] - previous_odom_pose[2])
         diff_angle = np.min(np.array([abs_diff_angle, 2*np.pi - abs_diff_angle]))
         sample_d_rot1 = d_rot1 + np.random.normal(size=self.num_particles)*diff_angle*alpha1
         sample_d_trans = d_trans + np.random.normal(size=self.num_particles)*d_trans*alpha3
@@ -94,22 +95,20 @@ class MCL:
         new_scan = skimage.transform.resize(scan.astype(np.float32), (self.num_angles,))
         predictions = self.range_predictions(self.particles)
         logprobs_ranges = self.logprob_range_prediction(predictions, new_scan[np.newaxis, :])
-        logprobs = logprobs_ranges.sum(axis=1)
-        logprobs = logprobs/100
-        probs = np.exp(logprobs)
-        probs = probs/probs.sum()
-        self.particles = self.resample_particles(self.particles, probs)
+        logprobs_particles = logprobs_ranges.sum(axis=1)/self.correlation_log_prob_factor
+        probs = np.exp(logprobs_logprobs)
+        norm_probs = probs/probs.sum()
+        self.particles = self.resample_particles(self.particles, norm_probs)
 
     def logprob_range_prediction(self, predictions, scan_line):
-        predictions = predictions.copy()
-        pdf = norm.logpdf(scan_line, loc=predictions, scale=.1)
-        out_range = uniform.logpdf(scan_line, loc=predictions*0.0 + 5.0, scale=20.0)
-        wh = np.where(predictions<-.5)
-        pdf[wh] = out_range[wh]
+        prediction_log_density = norm.logpdf(scan_line, loc=predictions, scale=.1)
+        out_of_range_density = uniform.logpdf(scan_line, loc=predictions*0.0 + 5.0, scale=20.0)
+        out_of_range = np.where(predictions<-.5)
+        prediction_log_density[out_of_range] = out_of_range_density[out_of_range]
         noise = uniform.logpdf(scan_line, loc=predictions*0.0 + 0.0, scale=25.0) + np.log(.01)
         isnan = np.isnan(scan_line)
         valid = (1-isnan)
-        stack = np.stack([pdf, noise])
+        stack = np.stack([prediction_log_density, noise])
         new_pdf = scipy.special.logsumexp(stack, axis=0)
         logpdf = np.nan_to_num(new_pdf) - 0 * isnan
         return logpdf
