@@ -39,6 +39,7 @@ class MCL:
         self.replacement = 400
         self.num_angles = 360  # Number of buckets in our angle quantization
         self.max_radius = 100  # Maximum radius in pixels that we make predictions over.
+        # below is magic number to compensate lidar scan points not independent.
         self.correlation_log_prob_factor = 100.0
         self.map_image_height = map_image.shape[0]
         self.map_width = map_image.shape[1] * self.resolution
@@ -59,7 +60,6 @@ class MCL:
         # polar_map has shape [self.num_angles, self.num_radius, 1, 2]
         # The dim 1 in 2nd from last above is for fast broadcast with particles
         self.polar_map = np.transpose(polar_map, axes=(1, 2, 0))[:, :, np.newaxis, :]
-        self.ndi_mode = _to_ndimage_mode('constant')
 
     def initial_pose(self, x, y, angle):
         self.particles = np.tile(
@@ -74,19 +74,16 @@ class MCL:
 
     def update_particles_odom(self, previous_odom_pose, current_odom_pose):
         #p.136 Probabilistic Robotics
-        alpha1 = 0.15  # this is different from book, ignoring d_rot1
-                      # Just using angle diffs, better for holonomic
+        alpha1 = 0.15
         alpha3 = 0.05
         diff_x = current_odom_pose[0] - previous_odom_pose[0]
         diff_y = current_odom_pose[1] - previous_odom_pose[1]
         d_rot1 = np.arctan2(diff_y, diff_x) - previous_odom_pose[2]
         d_trans = np.sqrt(diff_y**2 + diff_x**2)
         d_rot2 = current_odom_pose[2] - previous_odom_pose[2] - d_rot1
-        abs_diff_angle = np.abs(current_odom_pose[2] - previous_odom_pose[2])
-        diff_angle = np.min(np.array([abs_diff_angle, 2*np.pi - abs_diff_angle]))
-        sample_d_rot1 = d_rot1 + np.random.normal(size=self.num_particles)*diff_angle*alpha1
+        sample_d_rot1 = d_rot1 + np.random.normal(size=self.num_particles)*d_rot1*alpha1
         sample_d_trans = d_trans + np.random.normal(size=self.num_particles)*d_trans*alpha3
-        sample_d_rot2 = d_rot2 + np.random.normal(size=self.num_particles)*diff_angle*alpha1
+        sample_d_rot2 = d_rot2 + np.random.normal(size=self.num_particles)*d_rot2*alpha1
         self.particles[:, 0] += sample_d_trans * np.cos(self.particles[:, 2] + sample_d_rot1)
         self.particles[:, 1] += sample_d_trans * np.sin(self.particles[:, 2] + sample_d_rot1)
         self.particles[:, 2] += sample_d_rot1 + sample_d_rot2
@@ -96,7 +93,7 @@ class MCL:
         predictions = self.range_predictions(self.particles)
         logprobs_ranges = self.logprob_range_prediction(predictions, new_scan[np.newaxis, :])
         logprobs_particles = logprobs_ranges.sum(axis=1)/self.correlation_log_prob_factor
-        probs = np.exp(logprobs_logprobs)
+        probs = np.exp(logprobs_particles)
         norm_probs = probs/probs.sum()
         self.particles = self.resample_particles(self.particles, norm_probs)
 
@@ -118,7 +115,7 @@ class MCL:
         image_coord[:, 0] = self.map_image_height - (particles[:, 1] - self.origin[1])/self.resolution
         image_coord[:, 1] = (particles[:, 0] - self.origin[0])/self.resolution
         map_coords = np.transpose(self.polar_map + image_coord[:, :2], axes=(3,2,0,1))
-        polar_coord_predictions = ndi.map_coordinates(self.map_image, map_coords, prefilter=False, mode=self.ndi_mode, order=0, cval=0.0)
+        polar_coord_predictions = ndi.map_coordinates(self.map_image, map_coords, prefilter=False, order=0, cval=0.0)
         skimage.transform._warps._clip_warp_output(self.map_image, polar_coord_predictions, 'constant', 0.0, True)
         polar_coords = np.argmax(polar_coord_predictions, axis=2)*self.resolution
         out_of_range = np.where(np.max(polar_coord_predictions, axis=2)==0)
