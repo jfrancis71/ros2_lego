@@ -119,20 +119,20 @@ class MCL:
         map_coords = np.transpose(self.polar_map + image_coord[:, :2], axes=(3,2,0,1))
         polar_coord_predictions = ndi.map_coordinates(self.map_image, map_coords, prefilter=False, order=0, cval=0.0)
         skimage.transform._warps._clip_warp_output(self.map_image, polar_coord_predictions, 'constant', 0.0, True)
+        # where argmax has several equal maxima, it returns the first.
+        # hence returns closest point
         polar_coords = np.argmax(polar_coord_predictions, axis=2)*self.resolution
-        out_of_range = np.where(np.max(polar_coord_predictions, axis=2)==0)
-        polar_coords[out_of_range] = -1
+        out_of_range_indices = np.where(np.max(polar_coord_predictions, axis=2)==0)
+        polar_coords[out_of_range_indices] = -1
         predictions = np.array([ np.flip(np.roll(polar_coords[particle_id], int(360 * particles[particle_id, 2] / (2 * np.pi)))) for particle_id in range(len(particles))])
         return predictions
 
     def resample_particles(self, particles, probs):
-        new_particles = np.zeros_like(self.particles)
-        ls = np.array(np.random.choice(np.arange(len(self.particles)), size=self.replacement, p=probs))
-        new_particles[:self.replacement, :2] = particles[ls][:, :2]
-        new_particles[:self.replacement, 2] = particles[ls][:, 2]
-        kidnap_particles = self.num_particles - self.replacement
-        new_particles[self.replacement:] = np.transpose(np.array([ self.map_width*np.random.random(size=kidnap_particles), self.map_height*np.random.random(size=kidnap_particles), 2 * np.pi * np.random.random(size=kidnap_particles) ]))
-        return new_particles
+        resampled_particle_indices = np.random.choice(np.arange(len(self.particles)), size=self.replacement, p=probs)
+        resampled_particles = particles[resampled_particle_indices]
+        num_kidnap_particles = self.num_particles - self.replacement
+        kidnap_particles = np.transpose(np.array([self.map_width*np.random.random(size=num_kidnap_particles), self.map_height*np.random.random(size=num_kidnap_particles), 2 * np.pi * np.random.random(size=num_kidnap_particles) ]))
+        return np.row_stack([resampled_particles, kidnap_particles])
 
 
 class MCLNode(Node):
