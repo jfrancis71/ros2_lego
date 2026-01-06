@@ -98,17 +98,19 @@ class MCL:
         self.particles = self.resample_particles(self.particles, norm_probs)
 
     def logprob_range_prediction(self, predictions, scan_line):
-        prediction_log_density = norm.logpdf(scan_line, loc=predictions, scale=.1)
-        out_of_range_density = uniform.logpdf(scan_line, loc=predictions*0.0 + 5.0, scale=20.0)
-        out_of_range = np.where(predictions<-.5)
-        prediction_log_density[out_of_range] = out_of_range_density[out_of_range]
-        noise = uniform.logpdf(scan_line, loc=predictions*0.0 + 0.0, scale=25.0) + np.log(.01)
-        isnan = np.isnan(scan_line)
-        valid = (1-isnan)
-        stack = np.stack([prediction_log_density, noise])
-        new_pdf = scipy.special.logsumexp(stack, axis=0)
-        logpdf = np.nan_to_num(new_pdf) - 0 * isnan
-        return logpdf
+        z_hit, z_rand = .99, .01
+        log_z_hit, log_z_rand = np.log(z_hit), np.log(z_rand)
+        log_in_range_density = norm.logpdf(scan_line, loc=predictions, scale=.1)
+        log_out_of_range_density = uniform.logpdf(scan_line, loc=np.zeros_like(predictions) + 5.0, scale=20.0)
+        in_range_indices = np.where(predictions>=-.5)
+        out_of_range_indices = np.where(predictions<-.5)
+        log_prediction_density = np.zeros_like(predictions)
+        log_prediction_density[in_range_indices] = log_in_range_density[in_range_indices]
+        log_prediction_density[out_of_range_indices] = log_out_of_range_density[out_of_range_indices]
+        log_rand_density = uniform.logpdf(scan_line, loc=predictions*0.0, scale=25.0)
+        log_density = np.nan_to_num(scipy.special.logsumexp(np.stack([log_prediction_density + log_z_hit, log_rand_density + log_z_rand]), axis=0))
+        logpdf = np.nan_to_num(log_density)
+        return log_density
 
     def range_predictions(self, particles):
         image_coord = np.zeros_like(particles)
