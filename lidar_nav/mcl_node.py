@@ -67,10 +67,8 @@ class MCL:
 
     def expected_pose(self, particles):
         x_mean, y_mean, _ = np.mean(particles, axis=0)
-        y_std, x_std, _ = np.std(particles, axis=0)
-        kappa, angle, _ = vonmises.fit(particles[:, 2], fscale=1)
-        angle_std = 1/np.sqrt(kappa)
-        return (x_mean, y_mean, angle), (x_std, y_std, angle_std)
+        _, angle, _ = vonmises.fit(particles[:, 2], fscale=1)
+        return x_mean, y_mean, angle
 
     def update_particles_odom(self, previous_odom_pose, current_odom_pose):
         #p.136 Probabilistic Robotics
@@ -260,7 +258,7 @@ class MCLNode(Node):
         _, _, theta = euler_from_quaternion(rot)
         return (trans_tf.x, trans_tf.y, theta)
 
-    def publish_ros2(self, header, base_link_to_odom_transform, pose, pose_uncertainty, particles, predictions, log_prob):
+    def publish_ros2(self, header, base_link_to_odom_transform, pose, particles, predictions, log_prob):
         self.send_map_base_laser_transform(base_link_to_odom_transform, pose)
         self.publish_lidar_prediction(header.stamp, predictions)
         self.publish_pdf(header.stamp, log_prob)
@@ -323,11 +321,11 @@ class MCLNode(Node):
             self.localizer.update_particles_lidar(scan)
             self.tf_last_lidar_update = tf_odom_to_base_laser
         time.sleep(.3)  # This helps with "future transform" error. Why?
-        pose, pose_uncertainty = self.localizer.expected_pose(self.localizer.particles[:self.localizer.replacement])
+        pose = self.localizer.expected_pose(self.localizer.particles[:self.localizer.replacement])
         mean_predictions = self.localizer.range_predictions(np.array([[pose[0], pose[1], pose[2]]]))
         new_scan = skimage.transform.resize(scan.astype(np.float32), (self.localizer.num_angles,))
         logprob_ranges = self.localizer.logprob_range_prediction(mean_predictions, new_scan[np.newaxis, :])
-        self.publish_ros2(lidar_msg.header, tf_base_laser_to_odom, pose, pose_uncertainty, self.localizer.particles, mean_predictions[0], logprob_ranges[0])
+        self.publish_ros2(lidar_msg.header, tf_base_laser_to_odom, pose, self.localizer.particles, mean_predictions[0], logprob_ranges[0])
         self.tf_previous_odom = tf_odom_to_base_laser
 
 
