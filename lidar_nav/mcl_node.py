@@ -141,13 +141,10 @@ class MCLNode(Node):
             origin = map_properties['origin']
             resolution = map_properties["resolution"]
         map = skimage.io.imread(os.path.join(os.path.split(self.map_file)[0], image_filename))
-        self.localizer = MCL(map, origin, resolution)
-        self.tf_previous_odom = None
-        self.tf_previous_lidar_update = None
-        self.tf_static_broadcaster = StaticTransformBroadcaster(self)
+        self.mcl = MCL(map, origin, resolution)
         self.initial_pose_received = False
-        self.diff_t = 0.03
-        self.diff_angle = .08
+        self.min_dist = 0.03  # minimum distance for lidar update
+        self.min_angle = .08  # minimum angle change for lidar update
         self.lidar_subscription = self.create_subscription(
             LaserScan,
             "/scan",
@@ -163,6 +160,16 @@ class MCLNode(Node):
         self.pdf_publisher = \
             self.create_publisher(LaserScan, "/pdf", 1)
         self.marker_pdf_publisher = self.create_publisher(Marker, '/particles_marker', 1)
+        lidar_msg = LaserScan()
+        lidar_msg.angle_min = 0.0
+        lidar_msg.angle_max = 2 * np.pi
+        lidar_msg.angle_increment = 2 * np.pi / 360
+        lidar_msg.time_increment = 0.00019850002718158066
+        lidar_msg.scan_time = 0.10004401206970215
+        lidar_msg.range_min = 0.019999999552965164
+        lidar_msg.range_max = 25.0
+        lidar_msg.header.frame_id = "base_laser"
+        self.template_lidar_msg = lidar_msg
         self.tf_buffer = Buffer()
         qos = QoSProfile(
             depth=1,
@@ -170,6 +177,9 @@ class MCLNode(Node):
             history=HistoryPolicy.KEEP_LAST,
             )
         self.tf_listener = TransformListener(self.tf_buffer, self, spin_thread=True, qos=qos)
+        self.tf_previous_odom = None
+        self.tf_previous_lidar_update = None
+        self.tf_static_broadcaster = StaticTransformBroadcaster(self)
 
     def send_map_base_laser_transform(self, base_laser_to_odom_tf, pose):
         zero_to_odom_tf = TransformStamped()
@@ -189,42 +199,26 @@ class MCLNode(Node):
         self.tf_static_broadcaster.sendTransform([zero_to_odom_tf, map_to_zero_tf])
 
     def publish_lidar_prediction(self, stamp, ranges):
-        lidar_msg1 = LaserScan()
-        lidar_msg1.ranges = ranges
-        lidar_msg1.angle_min = 0.0
-        lidar_msg1.angle_max = 6.28318548
-        lidar_msg1.angle_increment = 2 * np.pi / 360
-        lidar_msg1.time_increment = 0.00019850002718158066
-        lidar_msg1.scan_time = 0.10004401206970215
-        lidar_msg1.range_min = 0.019999999552965164
-        lidar_msg1.range_max = 25.0
-        lidar_msg1.header.stamp = stamp
-        lidar_msg1.header.frame_id = "base_laser"
-        self.pred_publisher.publish(lidar_msg1)
+        lidar_msg = copy.deepcopy(self.template_lidar_msg)
+        lidar_msg.ranges = ranges
+        lidar_msg.header.stamp = stamp
+        self.pred_publisher.publish(lidar_msg)
 
     def publish_pdf(self, stamp, pdf):
-        lidar_msg1 = LaserScan()
+        lidar_msg = copy.deepcopy(self.template_lidar_msg)
         squashed_pdf = -np.tanh(pdf)+2
-        lidar_msg1.ranges = squashed_pdf
-        lidar_msg1.angle_min = 0.0
-        lidar_msg1.angle_max = 6.28318548
-        lidar_msg1.angle_increment = 2 * np.pi / 360
-        lidar_msg1.time_increment = 0.00019850002718158066
-        lidar_msg1.scan_time = 0.10004401206970215
-        lidar_msg1.range_min = 0.019999999552965164
-        lidar_msg1.range_max = 25.0
-        lidar_msg1.header.stamp = stamp
-        lidar_msg1.header.frame_id = "base_laser"
-        self.pdf_publisher.publish(lidar_msg1)
+        lidar_msg.ranges = squashed_pdf
+        lidar_msg.header.stamp = stamp
+        self.pdf_publisher.publish(lidar_msg)
 
-    def publish_point_cloud(self, stamp, pose, particles):
-        map_points = np.zeros([self.localizer.num_particles, 3])
+    def publish_point_cloud(self, stamp, pose):
+        map_points = np.zeros([self.mcl.num_particles, 3])
         new_pose = np.zeros([3])
-        map_points[:, 0] = particles[:self.localizer.num_particles, 0]
-        map_points[:, 1] = particles[:self.localizer.num_particles, 1]
+        map_points[:, 0] = self.mcl.particles[:, 0]
+        map_points[:, 1] = self.mcl.particles[:, 1]
         new_pose[:2] = pose[:2]
         points = map_points - new_pose
-        rot_points = np.zeros([self.localizer.num_particles, 3])
+        rot_points = np.zeros([self.mcl.num_particles, 3])
         rot_points[:, 0] = points[:, 0] * np.cos(-pose[2]) - points[:, 1] * np.sin(-pose[2])
         rot_points[:, 1] = points[:, 0] * np.sin(-pose[2]) + points[:, 1] * np.cos(-pose[2])
         marker = Marker()
@@ -255,11 +249,11 @@ class MCLNode(Node):
         _, _, theta = euler_from_quaternion(rot)
         return (trans_tf.x, trans_tf.y, theta)
 
-    def publish_ros2(self, header, base_link_to_odom_transform, pose, particles, predictions, log_prob):
+    def publish_ros2(self, header, base_link_to_odom_transform, pose, predictions, log_prob):
         self.send_map_base_laser_transform(base_link_to_odom_transform, pose)
         self.publish_lidar_prediction(header.stamp, predictions)
         self.publish_pdf(header.stamp, log_prob)
-        self.publish_point_cloud(header.stamp, pose, particles)
+        self.publish_point_cloud(header.stamp, pose)
 
     def initialpose_callback(self, initialpose_msg):
         try:
@@ -276,7 +270,7 @@ class MCLNode(Node):
         _, _, theta_laser = euler_from_quaternion(rot)
         # I am assuming here that laser and base_link just differ by orientation
         _, _, theta_diff = self.ros2_to_pose(base_link_to_base_laser_transform)
-        self.localizer.initial_pose(initialpose_msg.pose.pose.position.x, initialpose_msg.pose.pose.position.y, theta_laser + theta_diff)
+        self.mcl.initial_pose(initialpose_msg.pose.pose.position.x, initialpose_msg.pose.pose.position.y, theta_laser + theta_diff)
         print("Initial pose set.")
 
     def lidar_callback(self, lidar_msg):
@@ -306,7 +300,7 @@ class MCLNode(Node):
             return
         previous_odom_pose = self.ros2_to_pose(self.tf_previous_odom)
         current_odom_pose = self.ros2_to_pose(tf_odom_to_base_laser)
-        self.localizer.update_particles_odom(previous_odom_pose, current_odom_pose)
+        self.mcl.update_particles_odom(previous_odom_pose, current_odom_pose)
         previous_lidar_update_pose = self.ros2_to_pose(self.tf_previous_lidar_update)
         diff_x = current_odom_pose[0] - previous_lidar_update_pose[0]
         diff_y = current_odom_pose[1] - previous_lidar_update_pose[1]
@@ -314,15 +308,15 @@ class MCLNode(Node):
         abs_diff_angle = np.abs(current_odom_pose[2] - previous_lidar_update_pose[2])
         diff_angle = np.min(np.array([abs_diff_angle, 2*np.pi - abs_diff_angle]))
         abs_diff = np.abs(diff_angle)
-        if abs_diff > self.diff_angle or d_trans > self.diff_t:
-            self.localizer.update_particles_lidar(scan)
+        if abs_diff > self.min_angle or d_trans > self.min_dist:
+            self.mcl.update_particles_lidar(scan)
             self.tf_last_lidar_update = tf_odom_to_base_laser
         time.sleep(.3)  # This helps with "future transform" error. Why?
-        pose = self.localizer.expected_pose()
-        mean_predictions = self.localizer.range_predictions(np.array([[pose[0], pose[1], pose[2]]]))
-        new_scan = skimage.transform.resize(scan.astype(np.float32), (self.localizer.num_angles,))
-        logprob_ranges = self.localizer.logprob_range_prediction(mean_predictions, new_scan[np.newaxis, :])
-        self.publish_ros2(lidar_msg.header, tf_base_laser_to_odom, pose, self.localizer.particles, mean_predictions[0], logprob_ranges[0])
+        pose = self.mcl.expected_pose()
+        mean_predictions = self.mcl.range_predictions(np.array([[pose[0], pose[1], pose[2]]]))
+        new_scan = skimage.transform.resize(scan.astype(np.float32), (self.mcl.num_angles,))
+        logprob_ranges = self.mcl.logprob_range_prediction(mean_predictions, new_scan[np.newaxis, :])
+        self.publish_ros2(lidar_msg.header, tf_base_laser_to_odom, pose, mean_predictions[0], logprob_ranges[0])
         self.tf_previous_odom = tf_odom_to_base_laser
 
 
