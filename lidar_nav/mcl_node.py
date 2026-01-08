@@ -35,13 +35,11 @@ class MCL:
         self.map_image = (map_image == 0)  # binarize the image
         self.origin = origin
         self.resolution = resolution
-        self.num_particles = 400
-        self.num_kidnap_particles = 100
+        self.num_particles = 500
         self.num_angles = 360  # Number of buckets in our angle quantization
         self.max_radius = 100  # Maximum radius in pixels that we make predictions over.
         # below is magic number to compensate lidar scan points not independent.
         self.correlation_log_prob_factor = 100.0
-        self.num_total_particles = self.num_particles + self.num_kidnap_particles
         self.map_image_height = map_image.shape[0]
         self.map_width = map_image.shape[1] * self.resolution
         self.map_height = map_image.shape[0] * self.resolution
@@ -64,7 +62,7 @@ class MCL:
 
     def initial_pose(self, x, y, angle):
         self.particles = np.tile(
-            np.array([x, y, angle]), reps=(self.num_total_particles, 1))
+            np.array([x, y, angle]), reps=(self.num_particles, 1))
 
     def expected_pose(self):
         x_mean, y_mean, _ = np.mean(self.particles[:self.num_particles], axis=0)
@@ -80,9 +78,9 @@ class MCL:
         d_rot1 = np.arctan2(diff_y, diff_x) - previous_odom_pose[2]
         d_trans = np.sqrt(diff_y**2 + diff_x**2)
         d_rot2 = current_odom_pose[2] - previous_odom_pose[2] - d_rot1
-        sample_d_rot1 = d_rot1 + np.random.normal(size=self.num_total_particles)*d_rot1*alpha1
-        sample_d_trans = d_trans + np.random.normal(size=self.num_total_particles)*d_trans*alpha3
-        sample_d_rot2 = d_rot2 + np.random.normal(size=self.num_total_particles)*d_rot2*alpha1
+        sample_d_rot1 = d_rot1 + np.random.normal(size=self.num_particles)*d_rot1*alpha1
+        sample_d_trans = d_trans + np.random.normal(size=self.num_particles)*d_trans*alpha3
+        sample_d_rot2 = d_rot2 + np.random.normal(size=self.num_particles)*d_rot2*alpha1
         self.particles[:, 0] += sample_d_trans * np.cos(self.particles[:, 2] + sample_d_rot1)
         self.particles[:, 1] += sample_d_trans * np.sin(self.particles[:, 2] + sample_d_rot1)
         self.particles[:, 2] += sample_d_rot1 + sample_d_rot2
@@ -127,10 +125,9 @@ class MCL:
         return predictions
 
     def resample_particles(self, particles, probs):
-        resampled_particle_indices = np.random.choice(np.arange(self.num_total_particles), size=self.num_particles, p=probs)
+        resampled_particle_indices = np.random.choice(np.arange(self.num_particles), size=self.num_particles, p=probs)
         resampled_particles = particles[resampled_particle_indices]
-        kidnap_particles = np.transpose(np.array([self.map_width*np.random.random(size=self.num_kidnap_particles), self.map_height*np.random.random(size=self.num_kidnap_particles), 2 * np.pi * np.random.random(size=self.num_kidnap_particles) ]))
-        return np.row_stack([resampled_particles, kidnap_particles])
+        return resampled_particles
 
 
 class MCLNode(Node):
@@ -227,7 +224,7 @@ class MCLNode(Node):
         map_points[:, 1] = particles[:self.localizer.num_particles, 1]
         new_pose[:2] = pose[:2]
         points = map_points - new_pose
-        rot_points = np.zeros([400, 3])
+        rot_points = np.zeros([self.localizer.num_particles, 3])
         rot_points[:, 0] = points[:, 0] * np.cos(-pose[2]) - points[:, 1] * np.sin(-pose[2])
         rot_points[:, 1] = points[:, 0] * np.sin(-pose[2]) + points[:, 1] * np.cos(-pose[2])
         marker = Marker()
