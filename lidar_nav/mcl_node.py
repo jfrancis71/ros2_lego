@@ -44,9 +44,8 @@ class MCL:
         self.map_width = map_image.shape[1] * self.resolution
         self.map_height = map_image.shape[0] * self.resolution
         self.particles = None #  Particles are with respect to laser orientation
-        height = self.num_angles
         k_radius = 100 / 100
-        k_angle = height / (2 * np.pi)
+        k_angle = self.num_angles / (2 * np.pi)
         def polar_map_fn(output_coords):
             angle = output_coords[:, 1] / k_angle
             rr = ((output_coords[:, 0] / k_radius) * np.sin(angle))
@@ -88,13 +87,13 @@ class MCL:
     def update_particles_lidar(self, scan):
         new_scan = skimage.transform.resize(scan.astype(np.float32), (self.num_angles,))
         predictions = self.range_predictions(self.particles)
-        logprobs_ranges = self.logprob_range_prediction(predictions, new_scan[np.newaxis, :])
+        logprobs_ranges = self.logprob_range_predictions(predictions, new_scan[np.newaxis, :])
         logprobs_particles = logprobs_ranges.sum(axis=1)/self.correlation_log_prob_factor
         probs = np.exp(logprobs_particles)
         norm_probs = probs/probs.sum()
         self.particles = self.resample_particles(self.particles, norm_probs)
 
-    def logprob_range_prediction(self, predictions, scan_line):
+    def logprob_range_predictions(self, predictions, scan_line):
         z_hit, z_rand = .99, .01
         log_z_hit, log_z_rand = np.log(z_hit), np.log(z_rand)
         log_in_range_density = norm.logpdf(scan_line, loc=predictions, scale=.1)
@@ -211,16 +210,7 @@ class MCLNode(Node):
         lidar_msg.header.stamp = stamp
         self.pdf_publisher.publish(lidar_msg)
 
-    def publish_point_cloud(self, stamp, pose):
-        map_points = np.zeros([self.mcl.num_particles, 3])
-        new_pose = np.zeros([3])
-        map_points[:, 0] = self.mcl.particles[:, 0]
-        map_points[:, 1] = self.mcl.particles[:, 1]
-        new_pose[:2] = pose[:2]
-        points = map_points - new_pose
-        rot_points = np.zeros([self.mcl.num_particles, 3])
-        rot_points[:, 0] = points[:, 0] * np.cos(-pose[2]) - points[:, 1] * np.sin(-pose[2])
-        rot_points[:, 1] = points[:, 0] * np.sin(-pose[2]) + points[:, 1] * np.cos(-pose[2])
+    def publish_particles(self, stamp, pose):
         marker = Marker()
         marker.header.stamp = stamp
         marker.header.frame_id = "base_laser"
@@ -233,12 +223,11 @@ class MCLNode(Node):
         marker.pose.orientation.w = 1.0
         marker.scale.x, marker.scale.y, marker.scale.z = 0.03, 0.03, 0.05
         marker.color.r, marker.color.g, marker.color.b, marker.color.a = 0.3, 1.0, 1.0, .2
-        points_list = []
-        for l in range(rot_points.shape[0]):
-            p = Point()
-            p.x, p.y, p.z = rot_points[l, 0].item(), rot_points[l, 1].item(), 0.0
-            points_list.append(p)
-        marker.points = points_list
+        location = self.mcl.particles[:, :2] - pose[:2]
+        rot_points = np.zeros([self.mcl.num_particles, 2])
+        rot_points[:, 0] = location[:, 0] * np.cos(-pose[2]) - location[:, 1] * np.sin(-pose[2])
+        rot_points[:, 1] = location[:, 0] * np.sin(-pose[2]) + location[:, 1] * np.cos(-pose[2])
+        marker.points = [Point(x=x,y=y) for (x, y) in rot_points.tolist()]
         marker.frame_locked = True
         self.marker_pdf_publisher.publish(marker)
 
@@ -253,7 +242,7 @@ class MCLNode(Node):
         self.send_map_base_laser_transform(base_link_to_odom_transform, pose)
         self.publish_lidar_prediction(header.stamp, predictions)
         self.publish_pdf(header.stamp, log_prob)
-        self.publish_point_cloud(header.stamp, pose)
+        self.publish_particles(header.stamp, pose)
 
     def initialpose_callback(self, initialpose_msg):
         try:
@@ -315,7 +304,7 @@ class MCLNode(Node):
         pose = self.mcl.expected_pose()
         mean_predictions = self.mcl.range_predictions(np.array([[pose[0], pose[1], pose[2]]]))
         new_scan = skimage.transform.resize(scan.astype(np.float32), (self.mcl.num_angles,))
-        logprob_ranges = self.mcl.logprob_range_prediction(mean_predictions, new_scan[np.newaxis, :])
+        logprob_ranges = self.mcl.logprob_range_predictions(mean_predictions, new_scan[np.newaxis, :])
         self.publish_ros2(lidar_msg.header, tf_base_laser_to_odom, pose, mean_predictions[0], logprob_ranges[0])
         self.tf_previous_odom = tf_odom_to_base_laser
 
