@@ -30,6 +30,16 @@ from tf_transformations import euler_from_quaternion, quaternion_from_euler
 from tf2_ros.buffer import Buffer
 
 
+def angle_diff(angle_1, angle_2):
+    """Returns closest difference between two angles.
+
+       Note you cannot just subtract the angles, eg 3.1 - (-3.1) = 6.2. This not the closest angle change.
+
+    """
+    abs_diff_angle = np.abs(angle_1 - angle_2)
+    return np.min(np.array([abs_diff_angle, 2*np.pi - abs_diff_angle]))
+
+
 class MCL:
     def __init__(self, map_image, origin, resolution):
         self.map_image = (map_image == 0)  # binarize the image
@@ -82,8 +92,7 @@ class MCL:
         d_rot1 = np.arctan2(diff_y, diff_x) - previous_odom_pose[2]
         d_trans = np.sqrt(diff_y**2 + diff_x**2)
         d_rot2 = current_odom_pose[2] - previous_odom_pose[2] - d_rot1
-        abs_diff_angle = np.abs(current_odom_pose[2] - previous_odom_pose[2])
-        diff_angle = np.min(np.array([abs_diff_angle, 2*np.pi - abs_diff_angle]))
+        diff_angle = angle_diff(current_odom_pose[2], previous_odom_pose[2])
         sample_d_rot1 = d_rot1 + np.random.normal(size=self.num_particles)*diff_angle*alpha1
         sample_d_trans = d_trans + np.random.normal(size=self.num_particles)*d_trans*alpha3
         sample_d_rot2 = d_rot2 + np.random.normal(size=self.num_particles)*diff_angle*alpha1
@@ -301,10 +310,8 @@ class MCLNode(Node):
         diff_x = current_odom_pose[0] - previous_lidar_update_pose[0]
         diff_y = current_odom_pose[1] - previous_lidar_update_pose[1]
         d_trans = np.sqrt(diff_y**2 + diff_x**2)
-        abs_diff_angle = np.abs(current_odom_pose[2] - previous_lidar_update_pose[2])
-        diff_angle = np.min(np.array([abs_diff_angle, 2*np.pi - abs_diff_angle]))
-        abs_diff = np.abs(diff_angle)
-        if abs_diff > self.min_angle or d_trans > self.min_dist:
+        diff_angle = angle_diff(current_odom_pose[2], previous_lidar_update_pose[2])
+        if np.abs(diff_angle) > self.min_angle or d_trans > self.min_dist:
             self.mcl.update_particles_lidar(scan)
             self.tf_previous_lidar_update = tf_odom_to_base_laser
         time.sleep(.3)  # This helps with "future transform" error. Why?
