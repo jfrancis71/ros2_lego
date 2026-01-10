@@ -69,7 +69,12 @@ class MCL:
         return x_mean, y_mean, angle
 
     def update_particles_odom(self, previous_odom_pose, current_odom_pose):
-        #p.136 Probabilistic Robotics
+        # p.136 Probabilistic Robotics
+        # My angle error model is slightly different from above.
+        # Book assumes robot rotates to head in direction in which it actually
+        # travelled.
+        # Below model is more suitable for holonomic robot, or where lidar is
+        # mounted in different direction to robot direction of travel.
         alpha1 = 0.15
         alpha3 = 0.05
         diff_x = current_odom_pose[0] - previous_odom_pose[0]
@@ -77,9 +82,11 @@ class MCL:
         d_rot1 = np.arctan2(diff_y, diff_x) - previous_odom_pose[2]
         d_trans = np.sqrt(diff_y**2 + diff_x**2)
         d_rot2 = current_odom_pose[2] - previous_odom_pose[2] - d_rot1
-        sample_d_rot1 = d_rot1 + np.random.normal(size=self.num_particles)*d_rot1*alpha1
+        abs_diff_angle = np.abs(current_odom_pose[2] - previous_odom_pose[2])
+        diff_angle = np.min(np.array([abs_diff_angle, 2*np.pi - abs_diff_angle]))
+        sample_d_rot1 = d_rot1 + np.random.normal(size=self.num_particles)*diff_angle*alpha1
         sample_d_trans = d_trans + np.random.normal(size=self.num_particles)*d_trans*alpha3
-        sample_d_rot2 = d_rot2 + np.random.normal(size=self.num_particles)*d_rot2*alpha1
+        sample_d_rot2 = d_rot2 + np.random.normal(size=self.num_particles)*diff_angle*alpha1
         self.particles[:, 0] += sample_d_trans * np.cos(self.particles[:, 2] + sample_d_rot1)
         self.particles[:, 1] += sample_d_trans * np.sin(self.particles[:, 2] + sample_d_rot1)
         self.particles[:, 2] += sample_d_rot1 + sample_d_rot2
@@ -299,7 +306,7 @@ class MCLNode(Node):
         abs_diff = np.abs(diff_angle)
         if abs_diff > self.min_angle or d_trans > self.min_dist:
             self.mcl.update_particles_lidar(scan)
-            self.tf_last_lidar_update = tf_odom_to_base_laser
+            self.tf_previous_lidar_update = tf_odom_to_base_laser
         time.sleep(.3)  # This helps with "future transform" error. Why?
         pose = self.mcl.expected_pose()
         mean_predictions = self.mcl.range_predictions(np.array([[pose[0], pose[1], pose[2]]]))
