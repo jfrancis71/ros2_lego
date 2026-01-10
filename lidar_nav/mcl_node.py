@@ -196,7 +196,7 @@ class MCLNode(Node):
         self.tf_previous_lidar_update = None
         self.tf_static_broadcaster = StaticTransformBroadcaster(self)
 
-    def send_map_base_laser_transform(self, base_laser_to_odom_tf, pose):
+    def publish_map_odom_transform(self, base_laser_to_odom_tf, pose):
         zero_to_odom_tf = TransformStamped()
         zero_to_odom_tf.header.stamp = self.get_clock().now().to_msg()
         zero_to_odom_tf.header.frame_id = 'zero'
@@ -255,7 +255,7 @@ class MCLNode(Node):
         return (trans_tf.x, trans_tf.y, theta)
 
     def publish_ros2(self, header, base_link_to_odom_transform, pose, predictions, log_prob):
-        self.send_map_base_laser_transform(base_link_to_odom_transform, pose)
+        self.publish_map_odom_transform(base_link_to_odom_transform, pose)
         self.publish_lidar_prediction(header.stamp, predictions)
         self.publish_pdf(header.stamp, log_prob)
         self.publish_particles(header.stamp, pose)
@@ -277,6 +277,14 @@ class MCLNode(Node):
         _, _, theta_diff = self.ros2_to_pose(base_link_to_base_laser_transform)
         self.mcl.initial_pose(initialpose_msg.pose.pose.position.x, initialpose_msg.pose.pose.position.y, theta_laser + theta_diff)
         print("Initial pose set.")
+
+    def robot_moved(self, current_odom_pose):
+        previous_lidar_update_pose = self.ros2_to_pose(self.tf_previous_lidar_update)
+        diff_x = current_odom_pose[0] - previous_lidar_update_pose[0]
+        diff_y = current_odom_pose[1] - previous_lidar_update_pose[1]
+        d_trans = np.sqrt(diff_y**2 + diff_x**2)
+        diff_angle = angle_diff(current_odom_pose[2], previous_lidar_update_pose[2])
+        return np.abs(diff_angle) > self.min_angle or d_trans > self.min_dist
 
     def lidar_callback(self, lidar_msg):
         if not self.initial_pose_received:
@@ -306,12 +314,7 @@ class MCLNode(Node):
         previous_odom_pose = self.ros2_to_pose(self.tf_previous_odom)
         current_odom_pose = self.ros2_to_pose(tf_odom_to_base_laser)
         self.mcl.update_particles_odom(previous_odom_pose, current_odom_pose)
-        previous_lidar_update_pose = self.ros2_to_pose(self.tf_previous_lidar_update)
-        diff_x = current_odom_pose[0] - previous_lidar_update_pose[0]
-        diff_y = current_odom_pose[1] - previous_lidar_update_pose[1]
-        d_trans = np.sqrt(diff_y**2 + diff_x**2)
-        diff_angle = angle_diff(current_odom_pose[2], previous_lidar_update_pose[2])
-        if np.abs(diff_angle) > self.min_angle or d_trans > self.min_dist:
+        if self.robot_moved(current_odom_pose):
             self.mcl.update_particles_lidar(scan)
             self.tf_previous_lidar_update = tf_odom_to_base_laser
         time.sleep(.3)  # This helps with "future transform" error. Why?
