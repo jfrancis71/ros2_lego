@@ -54,7 +54,7 @@ class MCL:
         self.map_image_height = map_image.shape[0]
         self.map_width = map_image.shape[1] * self.resolution
         self.map_height = map_image.shape[0] * self.resolution
-        self.particles = None #  Particles are with respect to laser orientation
+        self.particles = None  # Particles are with respect to laser orientation
         k_radius = 100 / 100
         k_angle = self.num_angles / (2 * np.pi)
         def polar_map_fn(output_coords):
@@ -252,8 +252,8 @@ class MCLNode(Node):
         _, _, theta = euler_from_quaternion(rot)
         return (trans_tf.x, trans_tf.y, theta)
 
-    def publish_ros2(self, header, tf_base_link_to_odom, pose, predictions, log_prob):
-        self.publish_map_odom_transform(header.stamp, tf_base_link_to_odom, pose)
+    def publish_ros2(self, header, tf_base_laser_to_odom, pose, predictions, log_prob):
+        self.publish_map_odom_transform(header.stamp, tf_base_laser_to_odom, pose)
         self.publish_lidar_prediction(header.stamp, predictions)
         self.publish_pdf(header.stamp, log_prob)
         self.publish_particles(header.stamp, pose)
