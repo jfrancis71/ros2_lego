@@ -196,22 +196,22 @@ class MCLNode(Node):
         self.previous_odom_pose = None
         self.tf_static_broadcaster = StaticTransformBroadcaster(self)
 
-    def publish_map_odom_transform(self, base_laser_to_odom_tf, pose):
-        zero_to_odom_tf = TransformStamped()
-        zero_to_odom_tf.header.stamp = self.get_clock().now().to_msg()
-        zero_to_odom_tf.header.frame_id = 'zero'
-        zero_to_odom_tf.child_frame_id = 'odom'
-        zero_to_odom_tf.transform = base_laser_to_odom_tf.transform
-        map_to_zero_tf = TransformStamped()
-        map_to_zero_tf.header.stamp = self.get_clock().now().to_msg()
-        map_to_zero_tf.header.frame_id = 'map'
-        map_to_zero_tf.child_frame_id = 'zero'
-        m_to_z_tf_trans = map_to_zero_tf.transform.translation
-        m_to_z_tf_trans.x, m_to_z_tf_trans.y, m_to_z_tf_trans.z = pose[0], pose[1], 0.0
+    def publish_map_odom_transform(self, stamp, tf_base_laser_to_odom, pose):
+        tf_zero_to_odom = TransformStamped()
+        tf_zero_to_odom.header.stamp = stamp
+        tf_zero_to_odom.header.frame_id = 'zero'
+        tf_zero_to_odom.child_frame_id = 'odom'
+        tf_zero_to_odom.transform = tf_base_laser_to_odom.transform
+        tf_map_to_zero = TransformStamped()
+        tf_map_to_zero.header.stamp = stamp
+        tf_map_to_zero.header.frame_id = 'map'
+        tf_map_to_zero.child_frame_id = 'zero'
+        tf_m_to_z_trans = tf_map_to_zero.transform.translation
+        tf_m_to_z_trans.x, tf_m_to_z_trans.y, tf_m_to_z_trans.z = pose[0], pose[1], 0.0
         q = quaternion_from_euler(0, 0, pose[2])
-        m_to_z_tf_rot = map_to_zero_tf.transform.rotation
-        m_to_z_tf_rot.x, m_to_z_tf_rot.y, m_to_z_tf_rot.z, m_to_z_tf_rot.w = q[0], q[1], q[2], q[3]
-        self.tf_static_broadcaster.sendTransform([zero_to_odom_tf, map_to_zero_tf])
+        tf_m_to_z_rot = tf_map_to_zero.transform.rotation
+        tf_m_to_z_rot.x, tf_m_to_z_rot.y, tf_m_to_z_rot.z, tf_m_to_z_rot.w = q[0], q[1], q[2], q[3]
+        self.tf_static_broadcaster.sendTransform([tf_zero_to_odom, tf_map_to_zero])
 
     def publish_lidar_prediction(self, stamp, ranges):
         lidar_msg = copy.deepcopy(self.template_lidar_msg)
@@ -254,15 +254,15 @@ class MCLNode(Node):
         _, _, theta = euler_from_quaternion(rot)
         return (trans_tf.x, trans_tf.y, theta)
 
-    def publish_ros2(self, header, base_link_to_odom_transform, pose, predictions, log_prob):
-        self.publish_map_odom_transform(base_link_to_odom_transform, pose)
+    def publish_ros2(self, header, tf_base_link_to_odom, pose, predictions, log_prob):
+        self.publish_map_odom_transform(header.stamp, tf_base_link_to_odom, pose)
         self.publish_lidar_prediction(header.stamp, predictions)
         self.publish_pdf(header.stamp, log_prob)
         self.publish_particles(header.stamp, pose)
 
     def initialpose_callback(self, initialpose_msg):
         try:
-            base_link_to_base_laser_transform = self.tf_buffer.lookup_transform(
+            tf_base_link_to_base_laser = self.tf_buffer.lookup_transform(
                 "base_link",
                 "base_laser",
                 rclpy.time.Time())
@@ -274,7 +274,7 @@ class MCLNode(Node):
         rot = [r_t.x, r_t.y, r_t.z, r_t.w]
         _, _, theta_laser = euler_from_quaternion(rot)
         # I am assuming here that laser and base_link just differ by orientation
-        _, _, theta_diff = self.ros2_to_pose(base_link_to_base_laser_transform)
+        _, _, theta_diff = self.ros2_to_pose(tf_base_link_to_base_laser)
         self.mcl.initial_pose(initialpose_msg.pose.pose.position.x, initialpose_msg.pose.pose.position.y, theta_laser + theta_diff)
         print("Initial pose set.")
 
