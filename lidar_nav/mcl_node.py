@@ -75,8 +75,8 @@ class MCL:
             np.array([x, y, angle]), reps=(self.num_particles, 1))
 
     def expected_pose(self):
-        x_mean, y_mean, _ = np.mean(self.particles[:self.num_particles], axis=0)
-        _, angle, _ = vonmises.fit(self.particles[:self.num_particles, 2], fscale=1)
+        x_mean, y_mean, _ = np.mean(self.particles, axis=0)
+        _, angle, _ = vonmises.fit(self.particles[:, 2], fscale=1)
         return x_mean, y_mean, angle
 
     def update_particles_odom(self, previous_odom_pose, current_odom_pose):
@@ -197,14 +197,14 @@ class MCLNode(Node):
         self.previous_odom_pose = None
         self.tf_static_broadcaster = StaticTransformBroadcaster(self)
 
-    def publish_map_odom_transform(self, stamp, tf_base_laser_to_odom, pose):
+    def publish_map_odom_transform(self, tf_base_laser_to_odom, pose):
         tf_zero_to_odom = TransformStamped()
-        tf_zero_to_odom.header.stamp = stamp
+        tf_zero_to_odom.header.stamp = self.current_lidar_msg.header.stamp
         tf_zero_to_odom.header.frame_id = 'zero'
         tf_zero_to_odom.child_frame_id = 'odom'
         tf_zero_to_odom.transform = tf_base_laser_to_odom.transform
         tf_map_to_zero = TransformStamped()
-        tf_map_to_zero.header.stamp = stamp
+        tf_map_to_zero.header.stamp = self.current_lidar_msg.header.stamp
         tf_map_to_zero.header.frame_id = 'map'
         tf_map_to_zero.child_frame_id = 'zero'
         tf_m_to_z_trans = tf_map_to_zero.transform.translation
@@ -214,22 +214,22 @@ class MCLNode(Node):
         tf_m_to_z_rot.x, tf_m_to_z_rot.y, tf_m_to_z_rot.z, tf_m_to_z_rot.w = q[0], q[1], q[2], q[3]
         self.tf_static_broadcaster.sendTransform([tf_zero_to_odom, tf_map_to_zero])
 
-    def publish_lidar_prediction(self, stamp, ranges):
+    def publish_lidar_prediction(self, ranges):
         lidar_msg = copy.deepcopy(self.template_lidar_msg)
         lidar_msg.ranges = ranges
-        lidar_msg.header.stamp = stamp
+        lidar_msg.header.stamp = self.current_lidar_msg.header.stamp
         self.pred_publisher.publish(lidar_msg)
 
-    def publish_pdf(self, stamp, pdf):
+    def publish_pdf(self, pdf):
         lidar_msg = copy.deepcopy(self.template_lidar_msg)
         squashed_pdf = -np.tanh(pdf)+2
         lidar_msg.ranges = squashed_pdf
-        lidar_msg.header.stamp = stamp
+        lidar_msg.header.stamp = self.current_lidar_msg.header.stamp
         self.pdf_publisher.publish(lidar_msg)
 
-    def publish_particles(self, stamp, pose):
+    def publish_particles(self, pose):
         marker = Marker()
-        marker.header.stamp = stamp
+        marker.header.stamp = self.current_lidar_msg.header.stamp
         marker.header.frame_id = "base_laser"
         marker.ns = "basic_shapes"
         marker.id = 0
@@ -252,11 +252,11 @@ class MCLNode(Node):
         _, _, theta = euler_from_quaternion(rot)
         return (trans_tf.x, trans_tf.y, theta)
 
-    def publish_ros2(self, header, tf_base_laser_to_odom, pose, predictions, log_prob):
-        self.publish_map_odom_transform(header.stamp, tf_base_laser_to_odom, pose)
-        self.publish_lidar_prediction(header.stamp, predictions)
-        self.publish_pdf(header.stamp, log_prob)
-        self.publish_particles(header.stamp, pose)
+    def publish_ros2(self, tf_base_laser_to_odom, pose, predictions, log_prob):
+        self.publish_map_odom_transform(tf_base_laser_to_odom, pose)
+        self.publish_lidar_prediction(predictions)
+        self.publish_pdf(log_prob)
+        self.publish_particles(pose)
 
     def initialpose_callback(self, initialpose_msg):
         try:
@@ -318,7 +318,7 @@ class MCLNode(Node):
         mean_predictions = self.mcl.range_predictions(np.array([[pose[0], pose[1], pose[2]]]))
         new_scan = skimage.transform.resize(scan.astype(np.float32), (self.mcl.num_angles,))
         logprob_ranges = self.mcl.logprob_range_predictions(mean_predictions, new_scan[np.newaxis, :])
-        self.publish_ros2(lidar_msg.header, tf_base_laser_to_odom, pose, mean_predictions[0], logprob_ranges[0])
+        self.publish_ros2(tf_base_laser_to_odom, pose, mean_predictions[0], logprob_ranges[0])
 
 
 rclpy.init()
