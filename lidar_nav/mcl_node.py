@@ -102,25 +102,25 @@ class MCL:
         self.particles[:, 2] += sample_d_rot1 + sample_d_rot2
 
     def update_particles_lidar(self, scan):
-        new_scan = skimage.transform.resize(scan.astype(np.float32), (self.num_angles,))
         predictions = self.range_predictions(self.particles)
-        logprobs_ranges = self.logprob_range_predictions(predictions, new_scan[np.newaxis, :])
+        logprobs_ranges = self.logprob_range_predictions(predictions, scan)
         logprobs_particles = logprobs_ranges.sum(axis=1)/self.correlation_log_prob_factor
         probs = np.exp(logprobs_particles)
         norm_probs = probs/probs.sum()
         self.particles = self.resample_particles(self.particles, norm_probs)
 
-    def logprob_range_predictions(self, predictions, scan_line):
+    def logprob_range_predictions(self, predictions, raw_scan):
+        scan = skimage.transform.resize(raw_scan.astype(np.float32), (self.num_angles,))
         z_hit, z_rand = .99, .01
         log_z_hit, log_z_rand = np.log(z_hit), np.log(z_rand)
-        log_in_range_density = norm.logpdf(scan_line, loc=predictions, scale=.1)
-        log_out_of_range_density = uniform.logpdf(scan_line, loc=np.zeros_like(predictions) + 5.0, scale=20.0)
+        log_in_range_density = norm.logpdf(scan[np.newaxis, :], loc=predictions, scale=.1)
+        log_out_of_range_density = uniform.logpdf(scan, loc=np.zeros_like(predictions) + 5.0, scale=20.0)
         in_range_indices = np.where(predictions>=-.5)
         out_of_range_indices = np.where(predictions<-.5)
         log_prediction_density = np.zeros_like(predictions)
         log_prediction_density[in_range_indices] = log_in_range_density[in_range_indices]
         log_prediction_density[out_of_range_indices] = log_out_of_range_density[out_of_range_indices]
-        log_rand_density = uniform.logpdf(scan_line, loc=predictions*0.0, scale=25.0)
+        log_rand_density = uniform.logpdf(scan, loc=predictions*0.0, scale=25.0)
         log_density = np.nan_to_num(scipy.special.logsumexp(np.stack([log_prediction_density + log_z_hit, log_rand_density + log_z_rand]), axis=0))
         logpdf = np.nan_to_num(log_density)
         return log_density
@@ -316,8 +316,7 @@ class MCLNode(Node):
             self.previous_odom_pose = current_odom_pose
         pose = self.mcl.expected_pose()
         mean_predictions = self.mcl.range_predictions(np.array([[pose[0], pose[1], pose[2]]]))
-        new_scan = skimage.transform.resize(scan.astype(np.float32), (self.mcl.num_angles,))
-        logprob_ranges = self.mcl.logprob_range_predictions(mean_predictions, new_scan[np.newaxis, :])
+        logprob_ranges = self.mcl.logprob_range_predictions(mean_predictions, scan)
         self.publish_ros2(tf_base_laser_to_odom, pose, mean_predictions[0], logprob_ranges[0])
 
 
