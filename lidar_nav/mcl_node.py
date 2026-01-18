@@ -1,24 +1,17 @@
-import time
 import copy
-import itertools
 import os
 import yaml
 import numpy as np
 import scipy
-from scipy.linalg import circulant
 from scipy import ndimage as ndi
-from scipy.stats import bernoulli, uniform, norm, vonmises
+from scipy.stats import uniform, norm, vonmises
 from scipy.spatial.transform import Rotation as R
 import skimage
-from skimage._shared.utils import _to_ndimage_mode
-from skimage._shared.utils import convert_to_float
 import rclpy
 from rclpy.node import Node
 from rclpy.time import Time
 from rclpy.qos import QoSProfile, DurabilityPolicy, HistoryPolicy
-from std_msgs.msg import Header 
-from sensor_msgs.msg import LaserScan, PointCloud2
-from sensor_msgs_py import point_cloud2
+from sensor_msgs.msg import LaserScan
 from visualization_msgs.msg import Marker
 from geometry_msgs.msg import Point, TransformStamped, PoseWithCovarianceStamped
 from tf2_ros.transform_listener import TransformListener
@@ -26,7 +19,7 @@ from tf2_ros.transform_listener import TransformListener
 # clone git clone https://github.com/ros2/geometry2.git
 # Prepend ./src/geometry2/tf2_ros_py/tf2_ros to PYTHONPATH and export
 from static_transform_broadcaster import StaticTransformBroadcaster
-from tf2_ros import TransformBroadcaster, TransformException
+from tf2_ros import TransformException
 from tf_transformations import euler_from_quaternion, quaternion_from_euler
 from tf2_ros.buffer import Buffer
 
@@ -263,7 +256,7 @@ class MCLNode(Node):
             tf_base_link_to_base_laser = self.tf_buffer.lookup_transform(
                 "base_link",
                 "base_laser",
-                rclpy.time.Time())
+                Time())
         except TransformException as ex:
             print("No Transform for base_link to base_laser, initial pose not set.")
             return
