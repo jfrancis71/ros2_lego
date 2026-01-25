@@ -258,7 +258,8 @@ class MCLNode(Node):
                 "base_laser",
                 Time())
         except TransformException as ex:
-            print("No Transform for base_link to base_laser, initial pose not set.")
+            warn_msg = "No Transform for base_link to base_laser. Initial pose not set."
+            self.get_logger().warn(warn_msg)
             return
         self.initial_pose_received = True
         r_t = initialpose_msg.pose.pose.orientation
@@ -267,7 +268,7 @@ class MCLNode(Node):
         # I am assuming here that laser and base_link just differ by orientation
         _, _, theta_diff = self.ros2_to_pose(tf_base_link_to_base_laser)
         self.mcl.initial_pose(initialpose_msg.pose.pose.position.x, initialpose_msg.pose.pose.position.y, theta_laser + theta_diff)
-        print("Initial pose set.")
+        self.get_logger().info("Initial pose set.")
 
     def robot_moved(self, current_odom_pose):
         diff_x = current_odom_pose[0] - self.previous_odom_pose[0]
@@ -292,8 +293,7 @@ class MCLNode(Node):
                 "odom",
                 "base_laser",
                 lidar_msg_time)
-        except TransformException as ex:
-            print("Transform exception: ", ex)
+        except TransformException as ex:  # This is common and normal.
             return
         self.process_lidar(self.current_lidar_msg, tf_base_laser_to_odom, tf_odom_to_base_laser)
         self.current_lidar_msg = None
