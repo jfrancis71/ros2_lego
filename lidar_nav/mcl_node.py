@@ -233,7 +233,7 @@ class MCLNode(Node):
         marker.pose.orientation.w = 1.0
         marker.scale.x, marker.scale.y, marker.scale.z = 0.03, 0.03, 0.05
         marker.color.r, marker.color.g, marker.color.b, marker.color.a = 0.3, 1.0, 1.0, .2
-        particles_base_laser = np.transpose(np.matmul(R.from_rotvec([0, 0, -pose[2]]).as_matrix()[:2, :2], np.transpose(self.mcl.particles[:, :2] - pose[:2])))
+        particles_base_laser = np.matmul(self.mcl.particles[:, :2] - pose[:2], R.from_rotvec([0, 0, -pose[2]]).as_matrix()[:2, :2])
         marker.points = [Point(x=x,y=y) for (x, y) in particles_base_laser.tolist()]
         marker.frame_locked = True
         self.marker_pdf_publisher.publish(marker)
