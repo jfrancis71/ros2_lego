@@ -127,11 +127,12 @@ class MCL:
         skimage.transform._warps._clip_warp_output(self.map_image, polar_coord_predictions, 'constant', 0.0, True)
         # where argmax has several equal maxima, it returns the first.
         # hence returns closest point
-        polar_coords = np.argmax(polar_coord_predictions, axis=2)*self.resolution
+        ranges = np.argmax(polar_coord_predictions, axis=2)*self.resolution
         out_of_range_indices = np.where(np.max(polar_coord_predictions, axis=2)==0)
-        polar_coords[out_of_range_indices] = -1
-        predictions = np.array([ np.flip(np.roll(polar_coords[particle_id], int(360 * particles[particle_id, 2] / (2 * np.pi)))) for particle_id in range(len(particles))])
-        return predictions
+        ranges[out_of_range_indices] = -1
+        angles = (360 * particles[:, 2] / (2*np.pi)).astype(np.int32)
+        laser_frame_range_predictions = np.array([np.flip(np.roll(range, angle)) for (range,angle) in zip(ranges, angles)])
+        return laser_frame_range_predictions
 
     def resample_particles(self, particles, probs):
         resampled_particle_indices = np.random.choice(np.arange(self.num_particles), size=self.num_particles, p=probs)
