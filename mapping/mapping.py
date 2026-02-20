@@ -10,6 +10,7 @@ from geometry_msgs.msg import Point, TransformStamped, PoseWithCovarianceStamped
 from tf2_ros.transform_listener import TransformListener
 from tf2_ros import TransformException
 from tf2_ros.buffer import Buffer
+from tf_transformations import euler_from_quaternion
 
 
 class MappingNode(Node):
@@ -48,6 +49,7 @@ class MappingNode(Node):
             warn_msg = "No Transform for base_link to base_laser. Initial pose not set."
             self.get_logger().warn(warn_msg)
             return
+        print("POSE SET")
         self.initial_pose_received = True
 
     def lidar_callback(self, lidar_msg):
@@ -60,10 +62,9 @@ class MappingNode(Node):
         try:
             tf_base_link_to_map = self.tf_buffer.lookup_transform(
                 "map",
-                "base_link",
+                "base_laser",
                 lidar_msg_time)  # https://github.com/ros2/ros2_documentation/issues/4385
         except TransformException as ex:  # This is common and normal.
-            print("Ex", ex)
             return
         try:
             tf_base_link_to_base_laser = self.tf_buffer.lookup_transform(
@@ -75,7 +76,7 @@ class MappingNode(Node):
             self.get_logger().warn(warn_msg)
             return
         print("OIJ")
-        self.process_lidar(self.current_lidar_msg, tf_base_link_to_map)
+        self.process_lidar(lidar_msg, tf_base_link_to_map)
         self.current_lidar_msg = None
 
     def process_lidar(self, lidar_msg, tf_base_link_to_map):
@@ -89,21 +90,25 @@ class MappingNode(Node):
         my_map_msg.info.origin.position.y = -3.959
         dat = np.zeros([118, 317]) + self.prior_occupancy_prob
         print("X=", tf_base_link_to_map.transform.translation.x)
-        for l in range(len(lidar_msg.ranges)):
-            angle = l * 2 * np.pi / len(lidar_msg.ranges)
-            if math.isnan(lidar_msg.ranges[l]):
-                continue
-            y = np.cos(angle) * lidar_msg.ranges[l]
-            x = np.sin(angle) * lidar_msg.ranges[l]
-            row = 118 - int((tf_base_link_to_map.transform.translation.y+y-(-3.959))*(1/.05))
-            col = int((tf_base_link_to_map.transform.translation.x+x-(-13.64))*(1/.05))
-#            print(x, y, row, col)
-            if row < 0 or row >= 118 or col < 0 or col >= 317:
-                continue
-            dat[row, col] = 100.0
-#        col = int((tf_base_link_to_map.transform.translation.x-(-13.64))*(1/.05))
-#        print("col=", col)
-#        dat[:, col-2:col+2] = 100.0
+        rot_tf = tf_base_link_to_map.transform.rotation
+        rot = [rot_tf.x, rot_tf.y, rot_tf.z, rot_tf.w]
+        _, _, theta = euler_from_quaternion(rot)
+        print("THETA=", theta)
+        for x in range(317):
+            for y in range(118):
+                row = 118 - int((tf_base_link_to_map.transform.translation.y-(-3.959))*(1/.05))
+                row = int((tf_base_link_to_map.transform.translation.y-(-3.959))*(1/.05))
+                col = int((tf_base_link_to_map.transform.translation.x-(-13.64))*(1/.05))
+                distance = np.sqrt( (row-y)**2 + (col-x)**2 )
+                angle = np.arctan2(y-row, x-col)
+                lidar_idx = int((angle-theta) * len(lidar_msg.ranges) / (2*np.pi))
+                myrange = lidar_msg.ranges[lidar_idx]/.05
+                if distance < myrange - 2:
+                    dat[y, x] = 1.0
+                elif distance < myrange + 2:
+                    dat[y, x] = 100.0
+
+
         my_map_msg.data = dat.reshape(-1).astype(np.int32).tolist()
         self.map_publisher.publish(my_map_msg)
 
