@@ -1,0 +1,344 @@
+import copy
+import os
+import yaml
+import numpy as np
+import scipy
+from scipy import ndimage as ndi
+from scipy.stats import uniform, norm, vonmises
+from scipy.spatial.transform import Rotation as R
+import skimage
+import rclpy
+from rclpy.node import Node
+from rclpy.time import Time
+from rclpy.qos import QoSProfile, DurabilityPolicy, HistoryPolicy
+from sensor_msgs.msg import LaserScan
+from visualization_msgs.msg import Marker
+from geometry_msgs.msg import Point, TransformStamped, PoseWithCovarianceStamped
+from tf2_ros.transform_listener import TransformListener
+# Current StaticTransformBroadcaster is broken, we need to use from rolling.
+# clone git clone https://github.com/ros2/geometry2.git
+# Prepend ./src/geometry2/tf2_ros_py/tf2_ros to PYTHONPATH and export
+from static_transform_broadcaster import StaticTransformBroadcaster
+from tf2_ros import TransformException
+from tf_transformations import euler_from_quaternion, quaternion_from_euler
+from tf2_ros.buffer import Buffer
+import time
+
+
+def angle_diff(angle_1, angle_2):
+    """Returns closest difference between two angles.
+
+       Note you cannot just subtract the angles, eg 3.1 - (-3.1) = 6.2. This not the closest angle change.
+
+    """
+    abs_diff_angle = np.abs(angle_1 - angle_2)
+    return np.min(np.array([abs_diff_angle, 2*np.pi - abs_diff_angle]))
+
+
+class MCL:
+    def __init__(self, map_image, origin, resolution):
+        self.map_image = (map_image == 0)*0.9 + 0.01
+        self.origin = origin
+        self.resolution = resolution
+        self.num_particles = 50
+        self.num_angles = 360  # Number of buckets in our angle quantization
+        self.max_radius = 100  # Maximum radius in pixels that we make predictions over.
+        # below is magic number to compensate lidar scan points not independent.
+        self.correlation_log_prob_factor = 100.0
+        self.map_image_height = map_image.shape[0]
+        self.map_width = map_image.shape[1] * self.resolution
+        self.map_height = map_image.shape[0] * self.resolution
+        self.particles = None  # Particles are with respect to laser orientation
+        k_radius = 100 / 100
+        k_angle = self.num_angles / (2 * np.pi)
+        def polar_map_fn(output_coords):
+            angle = output_coords[:, 1] / k_angle
+            rr = ((output_coords[:, 0] / k_radius) * np.sin(angle))
+            cc = ((output_coords[:, 0] / k_radius) * np.cos(angle))
+            coords = np.column_stack((cc, rr))
+            return coords
+        polar_map = skimage.transform.warp_coords(polar_map_fn, (self.num_angles, self.max_radius))
+        # The last column gives (x,y) coordinates in our image grid of point
+        # using polar coordinates from the first two indices.
+        # polar_map has shape [self.num_angles, self.num_radius, 1, 2]
+        # The dim 1 in 2nd from last above is for fast broadcast with particles
+        self.polar_map = np.transpose(polar_map, axes=(1, 2, 0))[:, :, np.newaxis, :]
+
+    def initial_pose(self, x, y, angle):
+        self.particles = np.tile(
+            np.array([x, y, angle]), reps=(self.num_particles, 1))
+
+    def expected_pose(self):
+        x_mean, y_mean, _ = np.mean(self.particles, axis=0)
+        _, angle, _ = vonmises.fit(self.particles[:, 2], fscale=1)
+        return x_mean, y_mean, angle
+
+    def update_particles_odom(self, previous_odom_pose, current_odom_pose):
+        # p.136 Probabilistic Robotics
+        # My angle error model is slightly different from above.
+        # Book assumes robot rotates to head in direction in which it actually
+        # travelled.
+        # Below model is more suitable for holonomic robot, or where lidar is
+        # mounted in different direction to robot direction of travel.
+        alpha1 = 0.15
+        alpha3 = 0.05
+        diff_x = current_odom_pose[0] - previous_odom_pose[0]
+        diff_y = current_odom_pose[1] - previous_odom_pose[1]
+        d_rot1 = np.arctan2(diff_y, diff_x) - previous_odom_pose[2]
+        d_trans = np.sqrt(diff_y**2 + diff_x**2)
+        d_rot2 = current_odom_pose[2] - previous_odom_pose[2] - d_rot1
+        diff_angle = angle_diff(current_odom_pose[2], previous_odom_pose[2])
+        sample_d_rot1 = d_rot1 + np.random.normal(size=self.num_particles)*diff_angle*alpha1
+        sample_d_trans = d_trans + np.random.normal(size=self.num_particles)*d_trans*alpha3
+        sample_d_rot2 = d_rot2 + np.random.normal(size=self.num_particles)*diff_angle*alpha1
+        self.particles[:, 0] += sample_d_trans * np.cos(self.particles[:, 2] + sample_d_rot1)
+        self.particles[:, 1] += sample_d_trans * np.sin(self.particles[:, 2] + sample_d_rot1)
+        self.particles[:, 2] += sample_d_rot1 + sample_d_rot2
+
+    def update_particles_odom1(self, previous_odom_pose, current_odom_pose):
+        alpha1 = 0.25
+        alpha3 = 0.25
+
+        d_rot1 = 0.0
+        d_trans = 0.0
+        d_rot2 = 0.0
+
+        diff_angle = 1.0
+
+        sample_d_rot1 = d_rot1 + np.random.normal(size=self.num_particles) * diff_angle * alpha1
+        sample_d_trans = d_trans + np.random.normal(size=self.num_particles)*alpha3
+        sample_d_rot2 = d_rot2 + np.random.normal(size=self.num_particles)*diff_angle*alpha1
+        self.particles[:, 0] += sample_d_trans * np.cos(self.particles[:, 2] + sample_d_rot1)
+        self.particles[:, 1] += sample_d_trans * np.sin(self.particles[:, 2] + sample_d_rot1)
+        self.particles[:, 2] += sample_d_rot1 + sample_d_rot2
+
+    def update_particles_lidar(self, scan):
+#        return
+        start = time.time()
+#        self.particles[0, 0] = -3.7139
+#        self.particles[0, 1] = -1.3349
+#        self.particles[0, 2] = -1.565
+        logprobs_ranges = self.logprob_range_predictions(scan)
+        logprobs_particles = logprobs_ranges.sum(axis=1)/self.correlation_log_prob_factor
+        probs = np.exp(logprobs_particles)
+        probs = np.nan_to_num(probs, nan=0.0)
+        print(probs)
+        norm_probs = probs/probs.sum()
+        self.particles = self.resample_particles(self.particles, norm_probs)
+        end = time.time()
+        print("ELAPSED=", end-start)
+
+    def logprob_range_predictions(self, raw_scan):
+        scan = skimage.transform.resize(raw_scan.astype(np.float32), (self.num_angles,))
+        image_coord = np.zeros_like(self.particles)
+        image_coord[:, 0] = self.map_image_height - (self.particles[:, 1] - self.origin[1])/self.resolution
+        image_coord[:, 1] = (self.particles[:, 0] - self.origin[0]) / self.resolution
+#        image_coord[:, 1] = (self.particles[:, 0] - self.origin[0])/self.resolution
+        map_coords = np.transpose(self.polar_map + image_coord[:, :2], axes=(3,2,0,1))
+        polar_coord_predictions = ndi.map_coordinates(self.map_image, map_coords, prefilter=False, order=0, cval=0.0)
+        skimage.transform._warps._clip_warp_output(self.map_image, polar_coord_predictions, 'constant', 0.0, True)
+        angles = (360 * self.particles[:, 2] / (2 * np.pi)).astype(np.int32)
+        laser_frame_polar_predictions = np.array(
+            [np.flip(np.roll(polar_map, angle, axis=0), axis=0) for (polar_map, angle) in zip(polar_coord_predictions, angles)])
+        clear = np.roll(np.cumsum(np.log(1-laser_frame_polar_predictions), axis=2), shift=1, axis=2)
+        hit = np.log(laser_frame_polar_predictions)
+        logprob = hit + clear
+        locs = polar_coord_predictions*0.0
+        locs[:,:] = np.array(range(100))*self.resolution
+        locs = np.transpose(locs, [0, 2, 1])
+        component_logdensity = norm.logpdf(scan[np.newaxis, :], loc=locs, scale=.1)
+        component_logdensity = np.transpose(component_logdensity, [0, 2, 1])
+        log_prediction_density = scipy.special.logsumexp(component_logdensity+logprob, 2)
+        z_hit, z_rand = .99, .01
+        log_z_hit, log_z_rand = np.log(z_hit), np.log(z_rand)
+#        log_in_range_density = norm.logpdf(scan[np.newaxis, :], loc=predictions, scale=.1)
+#        log_out_of_range_density = uniform.logpdf(scan, loc=np.zeros_like(predictions) + 5.0, scale=20.0)
+#        in_range_indices = np.where(predictions>=-.5)
+#        out_of_range_indices = np.where(predictions<-.5)
+#        log_prediction_density = np.zeros_like(predictions)
+#        log_prediction_density[in_range_indices] = log_in_range_density[in_range_indices]
+#        log_prediction_density[out_of_range_indices] = log_out_of_range_density[out_of_range_indices]
+        log_rand_density = uniform.logpdf(scan, loc=log_prediction_density*0.0, scale=25.0)
+        log_density = np.nan_to_num(scipy.special.logsumexp(np.stack([log_prediction_density + log_z_hit, log_rand_density + log_z_rand]), axis=0))
+        # Possibilities:
+        1. 
+        return log_density
+
+    def resample_particles(self, particles, probs):
+        resampled_particle_indices = np.random.choice(np.arange(self.num_particles), size=self.num_particles, p=probs)
+        resampled_particles = particles[resampled_particle_indices]
+        return resampled_particles
+
+
+class MCLNode(Node):
+    def __init__(self):
+        super().__init__("mcl_node")
+        self.declare_parameter('map', 'my_house.yaml')
+        self.map_file = self.get_parameter('map').get_parameter_value().string_value
+        with open(self.map_file, 'r') as map_file:
+            map_properties = yaml.safe_load(map_file)
+            image_filename = map_properties['image']
+            origin = map_properties['origin']
+            resolution = map_properties["resolution"]
+        map = skimage.io.imread(os.path.join(os.path.split(self.map_file)[0], image_filename))
+        self.mcl = MCL(map, origin, resolution)
+        self.initial_pose_received = False
+        self.min_dist = 0.03  # minimum distance for lidar update
+        self.min_angle = .08  # minimum angle change for lidar update
+        self.lidar_subscription = self.create_subscription(
+            LaserScan,
+            "/scan",
+            self.lidar_callback,
+            1)
+        self.initialpose_subscription = self.create_subscription(
+            PoseWithCovarianceStamped,
+            "/initialpose",
+            self.initialpose_callback,
+            1)
+        self.pred_publisher = \
+            self.create_publisher(LaserScan, "/pred_laser", 1)
+        self.pdf_publisher = \
+            self.create_publisher(LaserScan, "/pdf", 1)
+        self.marker_pdf_publisher = self.create_publisher(Marker, '/particles_marker', 1)
+        lidar_msg = LaserScan()
+        lidar_msg.angle_min = 0.0
+        lidar_msg.angle_max = 2 * np.pi
+        lidar_msg.angle_increment = 2 * np.pi / 360
+        lidar_msg.time_increment = 0.00019850002718158066
+        lidar_msg.scan_time = 0.10004401206970215
+        lidar_msg.range_min = 0.019999999552965164
+        lidar_msg.range_max = 25.0
+        lidar_msg.header.frame_id = "base_laser"
+        self.template_lidar_msg = lidar_msg
+        self.tf_buffer = Buffer()
+        qos = QoSProfile(
+            depth=1,
+            durability=DurabilityPolicy.VOLATILE,
+            history=HistoryPolicy.KEEP_LAST,
+            )
+        self.tf_listener = TransformListener(self.tf_buffer, self, spin_thread=False, qos=qos)
+        self.current_lidar_msg = None
+        self.previous_odom_pose = None
+        self.tf_static_broadcaster = StaticTransformBroadcaster(self)
+
+    def publish_map_odom_transform(self, tf_base_laser_to_odom, pose):
+        tf_zero_to_odom = TransformStamped()
+        tf_zero_to_odom.header.stamp = self.current_lidar_msg.header.stamp
+        tf_zero_to_odom.header.frame_id = 'zero'
+        tf_zero_to_odom.child_frame_id = 'odom'
+        tf_zero_to_odom.transform = tf_base_laser_to_odom.transform
+        tf_map_to_zero = TransformStamped()
+        tf_map_to_zero.header.stamp = self.current_lidar_msg.header.stamp
+        tf_map_to_zero.header.frame_id = 'map'
+        tf_map_to_zero.child_frame_id = 'zero'
+        tf_m_to_z_trans = tf_map_to_zero.transform.translation
+        tf_m_to_z_trans.x, tf_m_to_z_trans.y, tf_m_to_z_trans.z = pose[0], pose[1], 0.0
+        q = quaternion_from_euler(0, 0, pose[2])
+        tf_m_to_z_rot = tf_map_to_zero.transform.rotation
+        tf_m_to_z_rot.x, tf_m_to_z_rot.y, tf_m_to_z_rot.z, tf_m_to_z_rot.w = q[0], q[1], q[2], q[3]
+        self.tf_static_broadcaster.sendTransform([tf_zero_to_odom, tf_map_to_zero])
+
+    def publish_pdf(self, pdf):
+        lidar_msg = copy.deepcopy(self.template_lidar_msg)
+        squashed_pdf = -np.tanh(pdf)+2
+        lidar_msg.ranges = squashed_pdf
+        lidar_msg.header.stamp = self.current_lidar_msg.header.stamp
+        self.pdf_publisher.publish(lidar_msg)
+
+    def publish_particles(self, pose):
+        marker = Marker()
+        marker.header.stamp = self.current_lidar_msg.header.stamp
+        marker.header.frame_id = "base_laser"
+        marker.ns = "basic_shapes"
+        marker.id = 0
+        marker.type = Marker.POINTS
+        marker.action = Marker.ADD
+        marker.pose.position.x, marker.pose.position.y, marker.pose.position.z = 0.0, 0.0, 0.0
+        marker.pose.orientation.x, marker.pose.orientation.y, marker.pose.orientation.z = 0.0, 0.0, 0.0
+        marker.pose.orientation.w = 1.0
+        marker.scale.x, marker.scale.y, marker.scale.z = 0.03, 0.03, 0.05
+        marker.color.r, marker.color.g, marker.color.b, marker.color.a = 0.3, 1.0, 1.0, .2
+        particles_base_laser = np.matmul(self.mcl.particles[:, :2] - pose[:2], R.from_rotvec([0, 0, -pose[2]]).as_matrix()[:2, :2])
+        marker.points = [Point(x=x,y=y) for (x, y) in particles_base_laser.tolist()]
+        marker.frame_locked = True
+        self.marker_pdf_publisher.publish(marker)
+
+    def ros2_to_pose(self, odom_transform):
+        trans_tf = odom_transform.transform.translation
+        rot_tf = odom_transform.transform.rotation
+        rot = [rot_tf.x, rot_tf.y, rot_tf.z, rot_tf.w]
+        _, _, theta = euler_from_quaternion(rot)
+        return (trans_tf.x, trans_tf.y, theta)
+
+    def publish_ros2(self, tf_base_laser_to_odom, pose, log_prob):
+        self.publish_map_odom_transform(tf_base_laser_to_odom, pose)
+        self.publish_pdf(log_prob)
+        self.publish_particles(pose)
+
+    def initialpose_callback(self, initialpose_msg):
+        try:
+            tf_base_link_to_base_laser = self.tf_buffer.lookup_transform(
+                "base_link",
+                "base_laser",
+                Time())
+        except TransformException as ex:
+            warn_msg = "No Transform for base_link to base_laser. Initial pose not set."
+            self.get_logger().warn(warn_msg)
+            return
+        self.initial_pose_received = True
+        r_t = initialpose_msg.pose.pose.orientation
+        rot = [r_t.x, r_t.y, r_t.z, r_t.w]
+        _, _, theta_laser = euler_from_quaternion(rot)
+        # I am assuming here that laser and base_link just differ by orientation
+        _, _, theta_diff = self.ros2_to_pose(tf_base_link_to_base_laser)
+        self.mcl.initial_pose(initialpose_msg.pose.pose.position.x, initialpose_msg.pose.pose.position.y, theta_laser + theta_diff)
+        self.get_logger().info("Initial pose set.")
+
+    def robot_moved(self, current_odom_pose):
+        diff_x = current_odom_pose[0] - self.previous_odom_pose[0]
+        diff_y = current_odom_pose[1] - self.previous_odom_pose[1]
+        d_trans = np.sqrt(diff_y**2 + diff_x**2)
+        diff_angle = angle_diff(current_odom_pose[2], self.previous_odom_pose[2])
+        return np.abs(diff_angle) > self.min_angle or d_trans > self.min_dist
+
+    def lidar_callback(self, lidar_msg):
+        if not self.initial_pose_received:
+            return
+        if self.current_lidar_msg is None:
+            self.current_lidar_msg = lidar_msg
+            return
+        lidar_msg_time = Time.from_msg(self.current_lidar_msg.header.stamp)
+        try:
+            tf_base_laser_to_odom = self.tf_buffer.lookup_transform(
+                "base_laser",
+                "odom",
+                lidar_msg_time)  # https://github.com/ros2/ros2_documentation/issues/4385
+            tf_odom_to_base_laser = self.tf_buffer.lookup_transform(
+                "odom",
+                "base_laser",
+                lidar_msg_time)
+        except TransformException as ex:  # This is common and normal.
+            return
+        self.process_lidar(self.current_lidar_msg, tf_base_laser_to_odom, tf_odom_to_base_laser)
+        self.current_lidar_msg = None
+
+    def process_lidar(self, lidar_msg, tf_base_laser_to_odom, tf_odom_to_base_laser):
+        print("PROC")
+        scan = np.array(lidar_msg.ranges)
+        current_odom_pose = self.ros2_to_pose(tf_odom_to_base_laser)
+        if self.previous_odom_pose is None:
+            self.previous_odom_pose = current_odom_pose
+        if self.robot_moved(current_odom_pose):
+            self.mcl.update_particles_odom(self.previous_odom_pose, current_odom_pose)
+            self.mcl.update_particles_lidar(scan)
+            self.previous_odom_pose = current_odom_pose
+        pose = self.mcl.expected_pose()
+        logprob_ranges = self.mcl.logprob_range_predictions(scan)
+        self.publish_ros2(tf_base_laser_to_odom, pose, logprob_ranges[0])
+
+
+rclpy.init()
+mcl_node = MCLNode()
+rclpy.spin(mcl_node)
+mcl_node.destroy_node()
+rclpy.shutdown()
