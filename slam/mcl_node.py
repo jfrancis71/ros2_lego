@@ -121,8 +121,6 @@ class MCL:
         logprobs_ranges = self.logprob_range_predictions(scan)
         logprobs_particles = logprobs_ranges.sum(axis=1)/self.correlation_log_prob_factor
         probs = np.exp(logprobs_particles)
-        probs = np.nan_to_num(probs, nan=0.0)
-        print(probs)
         norm_probs = probs/probs.sum()
         self.particles = self.resample_particles(self.particles, norm_probs)
         end = time.time()
@@ -141,28 +139,29 @@ class MCL:
         laser_frame_polar_predictions = np.array(
             [np.flip(np.roll(polar_map, angle, axis=0), axis=0) for (polar_map, angle) in zip(polar_coord_predictions, angles)])
         clear = np.roll(np.cumsum(np.log(1-laser_frame_polar_predictions), axis=2), shift=1, axis=2)
+        clear[:,:,0] = 0
         hit = np.log(laser_frame_polar_predictions)
         logprob = hit + clear
         locs = polar_coord_predictions*0.0
         locs[:,:] = np.array(range(100))*self.resolution
         locs = np.transpose(locs, [0, 2, 1])
-        component_logdensity = norm.logpdf(scan[np.newaxis, :], loc=locs, scale=.1)
-        component_logdensity = np.transpose(component_logdensity, [0, 2, 1])
-        log_prediction_density = scipy.special.logsumexp(component_logdensity+logprob, 2)
-        z_hit, z_rand = .99, .01
-        log_z_hit, log_z_rand = np.log(z_hit), np.log(z_rand)
+        pcomponent_logdensity = uniform.logpdf(scan[np.newaxis, :], loc=locs, scale=self.resolution)
+        component_logdensity = np.transpose(pcomponent_logdensity, [0, 2, 1])
+        log_prediction_density = scipy.special.logsumexp(component_logdensity+logprob, 2)-np.log(100)
+        z_hit, z_rand, z_nan = .97, .01, .02
+        log_z_hit, log_z_rand, log_z_nan = np.log(z_hit), np.log(z_rand), np.log(z_nan)
+        log_out_of_range_prob = np.log(1-np.exp(clear[:,:, 99]))
 #        log_in_range_density = norm.logpdf(scan[np.newaxis, :], loc=predictions, scale=.1)
-#        log_out_of_range_density = uniform.logpdf(scan, loc=np.zeros_like(predictions) + 5.0, scale=20.0)
+        log_out_of_range_density = uniform.logpdf(scan, loc=np.zeros([self.num_particles, 360]) + 5.0, scale=20.0)
 #        in_range_indices = np.where(predictions>=-.5)
 #        out_of_range_indices = np.where(predictions<-.5)
 #        log_prediction_density = np.zeros_like(predictions)
 #        log_prediction_density[in_range_indices] = log_in_range_density[in_range_indices]
 #        log_prediction_density[out_of_range_indices] = log_out_of_range_density[out_of_range_indices]
         log_rand_density = uniform.logpdf(scan, loc=log_prediction_density*0.0, scale=25.0)
-        log_density = np.nan_to_num(scipy.special.logsumexp(np.stack([log_prediction_density + log_z_hit, log_rand_density + log_z_rand]), axis=0))
-        # Possibilities:
-        1. 
-        return log_density
+        log_density = scipy.special.logsumexp(np.stack([log_prediction_density + log_z_hit, log_out_of_range_prob + log_out_of_range_density, log_rand_density + log_z_rand]), axis=0)
+        sensor_prob = np.nan_to_num(log_density-np.log(1-z_nan), nan=0.0) + np.isnan(log_density)*log_z_nan
+        return sensor_prob
 
     def resample_particles(self, particles, probs):
         resampled_particle_indices = np.random.choice(np.arange(self.num_particles), size=self.num_particles, p=probs)
