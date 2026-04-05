@@ -5,6 +5,7 @@ from cv_bridge import CvBridge
 import numpy as np
 import torch
 import cv2
+from message_filters import Subscriber, TimeSynchronizer
 
 import struct
 
@@ -19,38 +20,28 @@ from core.utils.utils import InputPadder
 class FFSNode(Node):
     def __init__(self):
         super().__init__("ffs_node")
-        self.subscription = self.create_subscription(
-            Image,
-            "/left/image_rect_color",
-            self.left_image_callback,
-            1)
-        self.subscription = self.create_subscription(
-            Image,
-            "/right/image_rect_color",
-            self.right_image_callback,
-            1)
+        self.left_image_sub = Subscriber(self, Image, "/left/image_rect_color")
+        self.right_image_sub = Subscriber(self, Image, "/right/image_rect_color")
         self.image_publisher = \
                 self.create_publisher(Image, "depth_image", 1)
         self.pcd_publisher = self.create_publisher(PointCloud2, 'ffs_pcd', 1)
         self.bridge = CvBridge()
-        self.get_logger().info("Node has started.")
         self.model = torch.load("/root/Fast-FoundationStereo/weights/20-30-48/model_best_bp2_serialize.pth", map_location='cpu', weights_only=False)
         self.model.cuda().eval()
-        self.left_image = None
+        queue_size = 10
+        self.sync = TimeSynchronizer([self.left_image_sub, self.right_image_sub], queue_size)
+        self.sync.registerCallback(self.SyncCallback)
+        self.get_logger().info("Node has started.")
 
     def convert(self, msg):
         cv_image = self.bridge.imgmsg_to_cv2(msg, desired_encoding="rgb8")
         image = cv_image.copy().transpose((2, 0, 1))
         return image
 
-    def left_image_callback(self, msg):
-        self.left_image = self.convert(msg)
-
-    def right_image_callback(self, msg):
-        if self.left_image is None:
-            return
-        right_image = self.convert(msg)
-        left_batch_image = np.expand_dims(self.left_image, axis=0)
+    def SyncCallback(self, left_msg, right_msg):
+        left_image = self.convert(left_msg)
+        right_image = self.convert(right_msg)
+        left_batch_image = np.expand_dims(left_image, axis=0)
         left_tensor_image = torch.tensor(left_batch_image, dtype=torch.float32, device="cuda")
         right_batch_image = np.expand_dims(right_image, axis=0)
         right_tensor_image = torch.tensor(right_batch_image, dtype=torch.float32, device="cuda")
@@ -60,9 +51,7 @@ class FFSNode(Node):
 
         with torch.amp.autocast('cuda', enabled=True, dtype=AMP_DTYPE):
             disp = self.model.forward(img0, img1, iters=4, test_mode=True, optimize_build_volume='pytorch1')
-#            disp = torch.clamp(disp*3, 0.0, 255.0)
             tens = torch.tensor(disp, dtype=torch.uint8)
-            print("DI=", disp.shape)
         disp = padder.unpad(disp.float())
         H, W = 240, 320
         disp = disp.data.cpu().numpy().reshape(H,W).clip(0, None)
@@ -71,16 +60,15 @@ class FFSNode(Node):
         min_val = None
         max_val = None
         vis = vis_disparity(disp, min_val=min_val, max_val=max_val, cmap=cmap, color_map=cv2.COLORMAP_TURBO)
-        left_orig = self.left_image.copy().transpose((1, 2, 0))
+        left_orig = left_image.copy().transpose((1, 2, 0))
         right_orig = right_image.copy().transpose((1, 2, 0))
-        print("VIS SHAPE=", vis.shape, "LEFT=", left_orig.shape, "RIGHT=", right_orig.shape)
         vis = np.concatenate([left_orig, right_orig, vis], axis=1)
         s = 1280/vis.shape[1]
         resized_vis = cv2.resize(vis, (int(vis.shape[1]*s), int(vis.shape[0]*s)))
 
         ros2_image_msg = self.bridge.cv2_to_imgmsg(resized_vis,
                                                    encoding="rgb8")
-        ros2_image_msg.header = msg.header
+        ros2_image_msg.header = left_msg.header
         self.image_publisher.publish(ros2_image_msg)
 
         K = np.array([130.39136801932622, 0.0, 153.42, 0.0, 130.09, 115.67, 0.0, 0.0, 1.0]).reshape(3,3)
@@ -114,7 +102,7 @@ class FFSNode(Node):
         )
 
         pcd_msg = PointCloud2(
-            header=msg.header,
+            header=left_msg.header,
             height=1,
             width=points.shape[0],
             is_dense=False,
