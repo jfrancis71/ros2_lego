@@ -6,6 +6,7 @@ import numpy as np
 import torch
 import cv2
 from message_filters import Subscriber, TimeSynchronizer
+from sensor_msgs.msg import CameraInfo
 
 import struct
 
@@ -22,6 +23,8 @@ class FFSNode(Node):
         super().__init__("ffs_node")
         self.left_image_sub = Subscriber(self, Image, "/left/image_rect_color")
         self.right_image_sub = Subscriber(self, Image, "/right/image_rect_color")
+        self.left_image_info_sub = Subscriber(self, CameraInfo, "/left/camera_info")
+        self.right_image_info_sub = Subscriber(self, CameraInfo, "/right/camera_info")
         self.image_publisher = \
                 self.create_publisher(Image, "depth_image", 1)
         self.pcd_publisher = self.create_publisher(PointCloud2, 'ffs_pcd', 1)
@@ -29,7 +32,7 @@ class FFSNode(Node):
         self.model = torch.load("/root/Fast-FoundationStereo/weights/20-30-48/model_best_bp2_serialize.pth", map_location='cpu', weights_only=False)
         self.model.cuda().eval()
         queue_size = 10
-        self.sync = TimeSynchronizer([self.left_image_sub, self.right_image_sub], queue_size)
+        self.sync = TimeSynchronizer([self.left_image_sub, self.right_image_sub, self.left_image_info_sub, self.right_image_info_sub], queue_size)
         self.sync.registerCallback(self.SyncCallback)
         self.get_logger().info("Node has started.")
 
@@ -38,7 +41,7 @@ class FFSNode(Node):
         image = cv_image.copy().transpose((2, 0, 1))
         return image
 
-    def SyncCallback(self, left_msg, right_msg):
+    def SyncCallback(self, left_msg, right_msg, left_info_msg, right_info_msg):
         left_image = self.convert(left_msg)
         right_image = self.convert(right_msg)
         left_batch_image = np.expand_dims(left_image, axis=0)
@@ -53,8 +56,7 @@ class FFSNode(Node):
             disp = self.model.forward(img0, img1, iters=4, test_mode=True, optimize_build_volume='pytorch1')
             tens = torch.tensor(disp, dtype=torch.uint8)
         disp = padder.unpad(disp.float())
-        H, W = 240, 320
-        disp = disp.data.cpu().numpy().reshape(H,W).clip(0, None)
+        disp = disp.data.cpu().numpy().reshape(left_info_msg.height,left_info_msg.width).clip(0, None)
 
         cmap = None
         min_val = None
@@ -71,8 +73,8 @@ class FFSNode(Node):
         ros2_image_msg.header = left_msg.header
         self.image_publisher.publish(ros2_image_msg)
 
-        K = np.array([130.39136801932622, 0.0, 153.42, 0.0, 130.09, 115.67, 0.0, 0.0, 1.0]).reshape(3,3)
-        baseline = .062
+        K = left_info_msg.k.reshape(3,3)
+        baseline = -right_info_msg.p[3] / right_info_msg.p[0]
         depth = K[0,0]*baseline/disp
         xyz_map = depth2xyzmap(depth, K)
         pcd = toOpen3dCloud(xyz_map.reshape(-1,3), left_orig.reshape(-1,3))
