@@ -1,6 +1,7 @@
 import rclpy
 from rclpy.node import Node
 from sensor_msgs.msg import Image, PointCloud2, PointField
+#from sensor_msgs import point_cloud2
 from cv_bridge import CvBridge
 import numpy as np
 import torch
@@ -80,29 +81,21 @@ class FFSNode(Node):
         pcd = toOpen3dCloud(xyz_map.reshape(-1,3), left_orig.reshape(-1,3))
         ros_dtype = PointField.FLOAT32
 
-        points = np.array(pcd.points)
-        colors = np.array(pcd.colors)
+        points = np.array(pcd.points, dtype=np.float32)
+        colors = np.array(np.array(pcd.colors, dtype=np.float32)*255, dtype=np.uint8)
+        colors = np.flip(colors, axis=1)
 
         itemsize = np.dtype(np.float32).itemsize
-
         fields = [
             PointField(name='x', offset=0, datatype=PointField.FLOAT32, count=1),
             PointField(name='y', offset=4, datatype=PointField.FLOAT32, count=1),
             PointField(name='z', offset=8, datatype=PointField.FLOAT32, count=1),
             PointField(name='rgb', offset=12, datatype=PointField.UINT32, count=1),
         ]
-
-        point_struct = struct.Struct("<fffBBB")
         num_points = points.shape[0]
-        buffer = bytearray(point_struct.size * num_points)
-        for i in range(num_points):
-            r, g, b = colors[i]
-            r, g, b = colors[i, 0]*255, colors[i, 1]*255, colors[i, 2]*255
-            r, g, b = int(r), int(g), int(b)
-            point_struct.pack_into(
-                buffer, i * point_struct.size, points[i,0], points[i,1], points[i,2], b, g, r
-        )
-
+        byte_array = np.zeros([num_points, 3*4 + 3], dtype=np.byte)
+        byte_array[:,:12] = np.frombuffer(points.tobytes(), dtype=np.byte).reshape(num_points, 3*4)
+        byte_array[:, 12:] = np.frombuffer( colors.tobytes(), dtype=np.byte).reshape(num_points, 3)
         pcd_msg = PointCloud2(
             header=left_msg.header,
             height=1,
@@ -112,7 +105,7 @@ class FFSNode(Node):
             fields=fields,
             point_step=15,
             row_step=(itemsize * 3 * points.shape[0]),
-            data=buffer
+            data=byte_array.tobytes()
         )
         self.pcd_publisher.publish(pcd_msg)
 
