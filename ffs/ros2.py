@@ -1,21 +1,15 @@
+import numpy as np
+import cv2
 import rclpy
 from rclpy.node import Node
-from sensor_msgs.msg import Image, PointCloud2, PointField
-#from sensor_msgs import point_cloud2
-from cv_bridge import CvBridge
-import numpy as np
-import torch
-import cv2
+from sensor_msgs.msg import Image, CameraInfo, PointCloud2, PointField
 from message_filters import Subscriber, TimeSynchronizer
-from sensor_msgs.msg import CameraInfo
-
-import struct
-
+from cv_bridge import CvBridge
+import torch
 from Utils import (
-    AMP_DTYPE, set_logging_format, set_seed, vis_disparity,
-    depth2xyzmap, toOpen3dCloud, o3d,
+    AMP_DTYPE, vis_disparity,
+    depth2xyzmap, toOpen3dCloud,
 )
-
 from core.utils.utils import InputPadder
 
 
@@ -58,9 +52,8 @@ class FFSNode(Node):
         pcd = toOpen3dCloud(xyz_map.reshape(-1,3), left_img.reshape(-1,3))
         ros_dtype = PointField.FLOAT32
         points = np.array(pcd.points, dtype=np.float32)
-        colors = np.array(np.array(pcd.colors, dtype=np.float32)*255, dtype=np.uint8)
+        colors = (np.array(pcd.colors, dtype=np.float32)*255).astype(dtype=np.uint8)
         colors = np.flip(colors, axis=1)
-        itemsize = np.dtype(np.float32).itemsize
         fields = [
             PointField(name='x', offset=0, datatype=PointField.FLOAT32, count=1),
             PointField(name='y', offset=4, datatype=PointField.FLOAT32, count=1),
@@ -68,7 +61,9 @@ class FFSNode(Node):
             PointField(name='rgb', offset=12, datatype=PointField.UINT32, count=1),
         ]
         num_points = points.shape[0]
-        byte_array = np.zeros([num_points, 3*4 + 3], dtype=np.byte)
+        itemsize = np.dtype(np.float32).itemsize
+        point_element_size = 3*itemsize + 3
+        byte_array = np.zeros([num_points, point_element_size], dtype=np.byte)
         byte_array[:,:12] = np.frombuffer(points.tobytes(), dtype=np.byte).reshape(num_points, 3*4)
         byte_array[:, 12:] = np.frombuffer( colors.tobytes(), dtype=np.byte).reshape(num_points, 3)
         pcd_msg = PointCloud2(
@@ -78,7 +73,7 @@ class FFSNode(Node):
             is_dense=False,
             is_bigendian=False,
             fields=fields,
-            point_step=15,
+            point_step=point_element_size,
             row_step=(itemsize * 3 * points.shape[0]),
             data=byte_array.tobytes()
         )
