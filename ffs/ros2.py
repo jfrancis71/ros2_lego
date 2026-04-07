@@ -32,7 +32,7 @@ class FFSNode(Node):
         self.get_logger().info("Node has started.")
 
     def move_image_to_gpu(self, image):
-        image = image.copy().transpose((2, 0, 1))
+        image = image.transpose((2, 0, 1))
         batch_image = np.expand_dims(image, axis=0)
         return torch.tensor(batch_image, dtype=torch.float32, device="cuda")
 
