@@ -6,6 +6,7 @@ import numpy as np
 #from scipy import ndimage as ndi
 from scipy.stats import uniform, norm, vonmises
 from scipy.spatial.transform import Rotation as R
+import scipy.stats as stats
 #import skimage
 import rclpy
 from rclpy.node import Node
@@ -24,6 +25,7 @@ from tf_transformations import euler_from_quaternion, quaternion_from_euler
 from tf2_ros.buffer import Buffer
 import time
 import message_filters
+from nav_msgs.msg import OccupancyGrid
 
 
 def angle_diff(angle_1, angle_2):
@@ -81,6 +83,8 @@ class SLAMNode(Node):
             self.lidar_callback,
             1)
         self.marker_pdf_publisher = self.create_publisher(Marker, '/particles_marker', 1)
+        self.map_publisher = \
+            self.create_publisher(OccupancyGrid, "my_map", 1)
         self.tf_buffer = Buffer()
         qos = QoSProfile(
             depth=100,
@@ -93,6 +97,8 @@ class SLAMNode(Node):
         self.tf_static_broadcaster = StaticTransformBroadcaster(self)
         self.particles = np.tile(np.array([0.0, 0.0, 0.0]), reps=(self.num_particles, 1, 1))
         # shape N, T, P where N is particle no, T is time, P is pose shape
+        self.neg= np.zeros([118, 317]) + 2
+        self.pos= np.zeros([118, 317]) + 0.5
         self.init_wait = 0
 
     def publish_map_odom_transform(self, tf_base_laser_to_odom, pose):
@@ -184,6 +190,52 @@ class SLAMNode(Node):
         pose = expected_pose(self.particles[:, -1])
 #        logprob_ranges = self.mcl.logprob_range_predictions(scan)
         self.publish_ros2(tf_base_laser_to_odom, pose)
+        lidar_msg_time = Time.from_msg(lidar_msg.header.stamp)
+        self.process_map(lidar_msg)
+        self.publish_map(lidar_msg)
+
+    def process_map(self, lidar_msg):
+        lidar_msg_time = Time.from_msg(lidar_msg.header.stamp)
+        try:
+            tf_base_link_to_map = self.tf_buffer.lookup_transform(
+                "map",
+                "base_laser",
+                lidar_msg_time)  # https://github.com/ros2/ros2_documentation/issues/ 4385
+        except TransformException as ex:  # This is common and normal.
+            print("NO MAP")
+            return
+        rot_tf = tf_base_link_to_map.transform.rotation
+        rot = [rot_tf.x, rot_tf.y, rot_tf.z, rot_tf.w]
+        _, _, theta = euler_from_quaternion(rot)
+        for x in range(317):
+            for y in range(118):
+                row = 118 - int((tf_base_link_to_map.transform.translation.y-(-3.959)
+)*(1/.05))
+                row = int((tf_base_link_to_map.transform.translation.y-(-3.959))*(1/.05))
+                col = int((tf_base_link_to_map.transform.translation.x-(-13.64))*(1/.05))
+                distance = np.sqrt( (row-y)**2 + (col-x)**2 )
+                angle = np.arctan2(y-row, x-col)
+                lidar_idx = int((angle-theta) * len(lidar_msg.ranges) / (2*np.pi))
+                myrange = lidar_msg.ranges[lidar_idx]/.05
+                if distance < myrange - 2:
+                    self.neg[y, x] += 1.0
+                elif distance < myrange + 2:
+                    self.pos[y, x] += 1.0
+
+
+    def publish_map(self, lidar_msg):
+        my_map_msg = OccupancyGrid()
+        my_map_msg.header = lidar_msg.header
+        my_map_msg.header.frame_id = "map"
+        my_map_msg.info.resolution = .05
+        my_map_msg.info.width = 317
+        my_map_msg.info.height = 118
+        my_map_msg.info.origin.position.x = -13.640
+        my_map_msg.info.origin.position.y = -3.959
+        mymap = stats.beta.mean(self.neg, self.pos)*100.0
+        my_map_msg.data = mymap.reshape(-1).astype(np.int32).tolist()
+        self.map_publisher.publish(my_map_msg)
+        print("Map published")
 
 
 rclpy.init()
