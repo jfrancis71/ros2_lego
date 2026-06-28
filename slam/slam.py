@@ -61,9 +61,11 @@ def update_particles_odom(particles, previous_odom_pose, current_odom_pose):
     sample_d_rot1 = d_rot1 + np.random.normal(size=num_particles)*diff_angle *alpha1
     sample_d_trans = d_trans + np.random.normal(size=num_particles)*d_trans* alpha3
     sample_d_rot2 = d_rot2 + np.random.normal(size=num_particles)*diff_angle *alpha1
-    particles[:, 0] += sample_d_trans * np.cos(particles[:, 2] + sample_d_rot1)
-    particles[:, 1] += sample_d_trans * np.sin(particles[:, 2] + sample_d_rot1)
-    particles[:, 2] += sample_d_rot1 + sample_d_rot2
+    new_particles = particles.copy()
+    new_particles[:, 0] += sample_d_trans * np.cos(particles[:, 2] + sample_d_rot1)
+    new_particles[:, 1] += sample_d_trans * np.sin(particles[:, 2] + sample_d_rot1)
+    new_particles[:, 2] += sample_d_rot1 + sample_d_rot2
+    return new_particles
 
 
 class SLAMNode(Node):
@@ -72,6 +74,7 @@ class SLAMNode(Node):
         self.initial_pose_received = False
         self.min_dist = 0.03  # minimum distance for lidar update
         self.min_angle = .08  # minimum angle change for lidar update
+        self.num_particles = 4
         self.lidar_subscription = self.create_subscription(
             LaserScan,
             "/scan",
@@ -88,7 +91,8 @@ class SLAMNode(Node):
         self.current_lidar_msg = None
         self.previous_odom_pose = None
         self.tf_static_broadcaster = StaticTransformBroadcaster(self)
-        self.particles = np.tile(np.array([0.0, 0.0, 0.0]), reps=(20, 1))
+        self.particles = np.tile(np.array([0.0, 0.0, 0.0]), reps=(self.num_particles, 1, 1))
+        # shape N, T, P where N is particle no, T is time, P is pose shape
         self.init_wait = 0
 
     def publish_map_odom_transform(self, tf_base_laser_to_odom, pose):
@@ -121,7 +125,7 @@ class SLAMNode(Node):
         marker.pose.orientation.w = 1.0
         marker.scale.x, marker.scale.y, marker.scale.z = 0.03, 0.03, 0.05
         marker.color.r, marker.color.g, marker.color.b, marker.color.a = 0.3, 1.0, 1.0, .2
-        particles_base_laser = np.matmul(self.particles[:, :2] - pose[:2], R.from_rotvec([0, 0, -pose[2]]).as_matrix()[:2, :2])
+        particles_base_laser = np.matmul(self.particles[:, -1, :2] - pose[:2], R.from_rotvec([0, 0, -pose[2]]).as_matrix()[:2, :2])
         marker.points = [Point(x=x,y=y) for (x, y) in particles_base_laser.tolist()]
         marker.frame_locked = True
         self.marker_pdf_publisher.publish(marker)
@@ -173,10 +177,11 @@ class SLAMNode(Node):
         if self.previous_odom_pose is None:
             self.previous_odom_pose = current_odom_pose
         if self.robot_moved(current_odom_pose):
-            update_particles_odom(self.particles, self.previous_odom_pose, current_odom_pose)
+            new_particles = update_particles_odom(self.particles[:, -1], self.previous_odom_pose, current_odom_pose)
+            self.particles = np.append(self.particles, np.reshape(new_particles, (self.num_particles, 1, 3)), axis=1)
             #self.mcl.update_particles_lidar(scan)
             self.previous_odom_pose = current_odom_pose
-        pose = expected_pose(self.particles)
+        pose = expected_pose(self.particles[:, -1])
 #        logprob_ranges = self.mcl.logprob_range_predictions(scan)
         self.publish_ros2(tf_base_laser_to_odom, pose)
 
