@@ -95,10 +95,11 @@ class SLAMNode(Node):
         self.current_lidar_msg = None
         self.previous_odom_pose = None
         self.tf_static_broadcaster = StaticTransformBroadcaster(self)
-        self.particles = np.tile(np.array([0.0, 0.0, 0.0]), reps=(self.num_particles, 1, 1))
+        self.particles = np.tile(np.array([0.0, 0.0, 1.5 * np.pi]), reps=(self.num_particles, 1, 1))
+        self.particles = np.tile(np.array([0.0, 0.0, -.5 * np.pi]), reps=(self.num_particles, 1, 1))
         # shape N, T, P where N is particle no, T is time, P is pose shape
-        self.neg= np.zeros([118, 317]) + 2
-        self.pos= np.zeros([118, 317]) + 0.5
+        self.neg= np.zeros([self.num_particles, 118, 317]) + 2
+        self.pos= np.zeros([self.num_particles, 118, 317]) + 0.5
         self.init_wait = 0
 
     def publish_map_odom_transform(self, tf_base_laser_to_odom, pose):
@@ -156,6 +157,8 @@ class SLAMNode(Node):
 
     def lidar_callback(self, lidar_msg):
         if self.init_wait < 10:
+            if self.init_wait == 0:
+                self.process_map(lidar_msg)
             self.init_wait += 1
             return
         if self.current_lidar_msg is None:
@@ -185,42 +188,35 @@ class SLAMNode(Node):
         if self.robot_moved(current_odom_pose):
             new_particles = update_particles_odom(self.particles[:, -1], self.previous_odom_pose, current_odom_pose)
             self.particles = np.append(self.particles, np.reshape(new_particles, (self.num_particles, 1, 3)), axis=1)
-            #self.mcl.update_particles_lidar(scan)
+            #new_particles = update_particles_lidar(scan)
             self.previous_odom_pose = current_odom_pose
+            print("PROC2")
+            self.process_map(lidar_msg)
         pose = expected_pose(self.particles[:, -1])
 #        logprob_ranges = self.mcl.logprob_range_predictions(scan)
         self.publish_ros2(tf_base_laser_to_odom, pose)
         lidar_msg_time = Time.from_msg(lidar_msg.header.stamp)
-        self.process_map(lidar_msg)
         self.publish_map(lidar_msg)
 
     def process_map(self, lidar_msg):
-        lidar_msg_time = Time.from_msg(lidar_msg.header.stamp)
-        try:
-            tf_base_link_to_map = self.tf_buffer.lookup_transform(
-                "map",
-                "base_laser",
-                lidar_msg_time)  # https://github.com/ros2/ros2_documentation/issues/ 4385
-        except TransformException as ex:  # This is common and normal.
-            print("NO MAP")
-            return
-        rot_tf = tf_base_link_to_map.transform.rotation
-        rot = [rot_tf.x, rot_tf.y, rot_tf.z, rot_tf.w]
-        _, _, theta = euler_from_quaternion(rot)
-        for x in range(317):
-            for y in range(118):
-                row = 118 - int((tf_base_link_to_map.transform.translation.y-(-3.959)
-)*(1/.05))
-                row = int((tf_base_link_to_map.transform.translation.y-(-3.959))*(1/.05))
-                col = int((tf_base_link_to_map.transform.translation.x-(-13.64))*(1/.05))
-                distance = np.sqrt( (row-y)**2 + (col-x)**2 )
-                angle = np.arctan2(y-row, x-col)
-                lidar_idx = int((angle-theta) * len(lidar_msg.ranges) / (2*np.pi))
-                myrange = lidar_msg.ranges[lidar_idx]/.05
-                if distance < myrange - 2:
-                    self.neg[y, x] += 1.0
-                elif distance < myrange + 2:
-                    self.pos[y, x] += 1.0
+        for particle in range(self.num_particles):
+            theta = self.particles[particle, -1, 2] - np.pi/2
+            theta = self.particles[particle, -1, 2]
+            for x in range(317):
+                for y in range(118):
+                    py = self.particles[particle, -1, 1]
+                    px = self.particles[particle, -1, 0]
+                    row = int((py-(-3.959))*(1/.05))
+                    col = int((px-(-13.64))*(1/.05))
+                    distance = np.sqrt( (row-y)**2 + (col-x)**2 )
+                    angle = np.arctan2(y-row, x-col)
+                    lidar_idx = int((angle-theta) * len(lidar_msg.ranges) / (2*np.pi))
+                    print("LID", theta, angle, lidar_idx)
+                    myrange = lidar_msg.ranges[lidar_idx]/.05
+                    if distance < myrange - 2:
+                        self.neg[particle, y, x] += 1.0
+                    elif distance < myrange + 2:
+                        self.pos[particle, y, x] += 1.0
 
 
     def publish_map(self, lidar_msg):
@@ -232,7 +228,7 @@ class SLAMNode(Node):
         my_map_msg.info.height = 118
         my_map_msg.info.origin.position.x = -13.640
         my_map_msg.info.origin.position.y = -3.959
-        mymap = stats.beta.mean(self.neg, self.pos)*100.0
+        mymap = stats.beta.mean(self.neg[-1], self.pos[-1])*100.0
         my_map_msg.data = mymap.reshape(-1).astype(np.int32).tolist()
         self.map_publisher.publish(my_map_msg)
         print("Map published")
