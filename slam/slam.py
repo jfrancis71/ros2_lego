@@ -7,7 +7,7 @@ import numpy as np
 from scipy.stats import uniform, norm, vonmises
 from scipy.spatial.transform import Rotation as R
 import scipy.stats as stats
-#import skimage
+import skimage
 import rclpy
 from rclpy.node import Node
 from rclpy.time import Time
@@ -70,13 +70,74 @@ def update_particles_odom(particles, previous_odom_pose, current_odom_pose):
     return new_particles
 
 
+class SLAM:
+    def __init__(self):
+        self.num_particles = 20
+        self.num_angles = 360
+        self.particles = np.tile(np.array([0.0, 0.0, -.5 * np.pi]), reps=(self.num_particles, 1, 1))
+        # shape N, T, P where N is particle no, T is time, P is pose shape
+        self.particles = np.tile(np.array([0.0, 0.0, -.5 * np.pi]), reps=(self.num_particles, 1))
+        self.init_orientation = -.5 * np.pi
+        # shape N, P where N is particle no, T is time, P is pose shape
+
+    def init(self, raw_scan):
+        self.scan = skimage.transform.resize(raw_scan.astype(np.float32), (self.num_angles
+,))
+
+    def update(self, scan, previous_odom_pose, current_odom_pose):
+        self.update_odom(previous_odom_pose, current_odom_pose)
+        self.update_lidar(scan)
+
+    def update_odom(self, previous_odom_pose, current_odom_pose):
+        # p.136 Probabilistic Robotics
+        # My angle error model is slightly different from above.
+        # Book assumes robot rotates to head in direction in which it actually
+        # travelled.
+        # Below model is more suitable for holonomic robot, or where lidar is
+        # mounted in different direction to robot direction of travel.
+        alpha1 = 0.15
+        alpha3 = 0.05
+        num_particles = self.particles.shape[0]
+        diff_x = current_odom_pose[0] - previous_odom_pose[0]
+        diff_y = current_odom_pose[1] - previous_odom_pose[1]
+        d_rot1 = np.arctan2(diff_y, diff_x) - previous_odom_pose[2]
+        d_trans = np.sqrt(diff_y**2 + diff_x**2)
+        d_rot2 = current_odom_pose[2] - previous_odom_pose[2] - d_rot1
+        diff_angle = angle_diff(current_odom_pose[2], previous_odom_pose[2])
+        sample_d_rot1 = d_rot1 + np.random.normal(size=num_particles)*diff_angle *alpha1
+        sample_d_trans = d_trans + np.random.normal(size=num_particles)*d_trans* alpha3
+        sample_d_rot2 = d_rot2 + np.random.normal(size=num_particles)*diff_angle *alpha1
+        self.particles[:, 0] += sample_d_trans * np.cos(self.particles[:, 2] + sample_d_rot1)
+        self.particles[:, 1] += sample_d_trans * np.sin(self.particles[:, 2] + sample_d_rot1)
+        self.particles[:, 2] += sample_d_rot1 + sample_d_rot2
+
+    def update_lidar(self, raw_scan):
+        scan = skimage.transform.resize(raw_scan.astype(np.float32), (self.num_angles
+,))
+        min = 10000
+        for p in range(self.num_particles):
+            roll = self.init_orientation - self.particles[p, 2]
+            new = np.roll(scan, -int(roll*360/(2 * np.pi)))
+            diff = (new - self.scan)**2
+            sum = np.nansum(diff)
+            if sum < min:
+                min = sum
+                idx = p
+        self.particles = np.tile(np.array([0.0, 0.0, self.particles[idx, 2]]), reps=(self.num_particles, 1))
+
+
+    def expected_pose(self):
+        x_mean, y_mean, _ = np.mean(self.particles[:, ], axis=0)
+        _, angle, _ = vonmises.fit(self.particles[:, 2], fscale=1)
+        return x_mean, y_mean, angle
+
+
 class SLAMNode(Node):
     def __init__(self):
         super().__init__("slam_node")
         self.initial_pose_received = False
         self.min_dist = 0.03  # minimum distance for lidar update
         self.min_angle = .08  # minimum angle change for lidar update
-        self.num_particles = 4
         self.lidar_subscription = self.create_subscription(
             LaserScan,
             "/scan",
@@ -95,12 +156,8 @@ class SLAMNode(Node):
         self.current_lidar_msg = None
         self.previous_odom_pose = None
         self.tf_static_broadcaster = StaticTransformBroadcaster(self)
-        self.particles = np.tile(np.array([0.0, 0.0, 1.5 * np.pi]), reps=(self.num_particles, 1, 1))
-        self.particles = np.tile(np.array([0.0, 0.0, -.5 * np.pi]), reps=(self.num_particles, 1, 1))
-        # shape N, T, P where N is particle no, T is time, P is pose shape
-        self.neg= np.zeros([self.num_particles, 118, 317]) + 2
-        self.pos= np.zeros([self.num_particles, 118, 317]) + 0.5
         self.init_wait = 0
+        self.slam = SLAM()
 
     def publish_map_odom_transform(self, tf_base_laser_to_odom, pose):
         tf_zero_to_odom = TransformStamped()
@@ -146,7 +203,7 @@ class SLAMNode(Node):
 
     def publish_ros2(self, tf_base_laser_to_odom, pose):
         self.publish_map_odom_transform(tf_base_laser_to_odom, pose)
-        self.publish_particles(pose)
+#        self.publish_particles(pose)
 
     def robot_moved(self, current_odom_pose):
         diff_x = current_odom_pose[0] - self.previous_odom_pose[0]
@@ -158,7 +215,7 @@ class SLAMNode(Node):
     def lidar_callback(self, lidar_msg):
         if self.init_wait < 10:
             if self.init_wait == 0:
-                self.process_map(lidar_msg)
+                self.slam.init(np.array(lidar_msg.ranges))
             self.init_wait += 1
             return
         if self.current_lidar_msg is None:
@@ -186,52 +243,10 @@ class SLAMNode(Node):
         if self.previous_odom_pose is None:
             self.previous_odom_pose = current_odom_pose
         if self.robot_moved(current_odom_pose):
-            new_particles = update_particles_odom(self.particles[:, -1], self.previous_odom_pose, current_odom_pose)
-            self.particles = np.append(self.particles, np.reshape(new_particles, (self.num_particles, 1, 3)), axis=1)
-            #new_particles = update_particles_lidar(scan)
+            self.slam.update(np.array(lidar_msg.ranges), self.previous_odom_pose, current_odom_pose)
             self.previous_odom_pose = current_odom_pose
-            print("PROC2")
-            self.process_map(lidar_msg)
-        pose = expected_pose(self.particles[:, -1])
-#        logprob_ranges = self.mcl.logprob_range_predictions(scan)
+        pose = self.slam.expected_pose()
         self.publish_ros2(tf_base_laser_to_odom, pose)
-        lidar_msg_time = Time.from_msg(lidar_msg.header.stamp)
-        self.publish_map(lidar_msg)
-
-    def process_map(self, lidar_msg):
-        for particle in range(self.num_particles):
-            theta = self.particles[particle, -1, 2] - np.pi/2
-            theta = self.particles[particle, -1, 2]
-            for x in range(317):
-                for y in range(118):
-                    py = self.particles[particle, -1, 1]
-                    px = self.particles[particle, -1, 0]
-                    row = int((py-(-3.959))*(1/.05))
-                    col = int((px-(-13.64))*(1/.05))
-                    distance = np.sqrt( (row-y)**2 + (col-x)**2 )
-                    angle = np.arctan2(y-row, x-col)
-                    lidar_idx = int((angle-theta) * len(lidar_msg.ranges) / (2*np.pi))
-                    print("LID", theta, angle, lidar_idx)
-                    myrange = lidar_msg.ranges[lidar_idx]/.05
-                    if distance < myrange - 2:
-                        self.neg[particle, y, x] += 1.0
-                    elif distance < myrange + 2:
-                        self.pos[particle, y, x] += 1.0
-
-
-    def publish_map(self, lidar_msg):
-        my_map_msg = OccupancyGrid()
-        my_map_msg.header = lidar_msg.header
-        my_map_msg.header.frame_id = "map"
-        my_map_msg.info.resolution = .05
-        my_map_msg.info.width = 317
-        my_map_msg.info.height = 118
-        my_map_msg.info.origin.position.x = -13.640
-        my_map_msg.info.origin.position.y = -3.959
-        mymap = stats.beta.mean(self.neg[-1], self.pos[-1])*100.0
-        my_map_msg.data = mymap.reshape(-1).astype(np.int32).tolist()
-        self.map_publisher.publish(my_map_msg)
-        print("Map published")
 
 
 rclpy.init()
