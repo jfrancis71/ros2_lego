@@ -81,8 +81,9 @@ class SLAM:
         # shape N, P where N is particle no, T is time, P is pose shape
 
     def init(self, raw_scan):
-        self.scan = skimage.transform.resize(raw_scan.astype(np.float32), (self.num_angles
-,))
+        self.scan = np.array(skimage.transform.resize(raw_scan.astype(np.float32), (self.num_angles,)))
+        print("SELF=", self.scan[90])
+
 
     def update(self, scan, previous_odom_pose, current_odom_pose):
         self.update_odom(previous_odom_pose, current_odom_pose)
@@ -107,23 +108,49 @@ class SLAM:
         sample_d_rot1 = d_rot1 + np.random.normal(size=num_particles)*diff_angle *alpha1
         sample_d_trans = d_trans + np.random.normal(size=num_particles)*d_trans* alpha3
         sample_d_rot2 = d_rot2 + np.random.normal(size=num_particles)*diff_angle *alpha1
-        self.particles[:, 0] += sample_d_trans * np.cos(self.particles[:, 2] + sample_d_rot1)
-        self.particles[:, 1] += sample_d_trans * np.sin(self.particles[:, 2] + sample_d_rot1)
-        self.particles[:, 2] += sample_d_rot1 + sample_d_rot2
+#        self.particles[:, 0] += sample_d_trans * np.cos(self.particles[:, 2] + sample_d_rot1)
+#        self.particles[:, 1] += sample_d_trans * np.sin(self.particles[:, 2] + sample_d_rot1)
+#        self.particles[:, 2] += sample_d_rot1 + sample_d_rot2
+#        self.particles[:,:2] += np.random.normal(size=(num_particles,2))*.1
+        self.particles += np.random.normal(size=(num_particles,3))*.1
+#        self.particles[:,0] += np.random.normal(size=(num_particles))*.1
+#        self.particles[:,0] += .1
 
     def update_lidar(self, raw_scan):
         scan = skimage.transform.resize(raw_scan.astype(np.float32), (self.num_angles
 ,))
         min = 10000
         for p in range(self.num_particles):
+            bearings = np.zeros([360]) + 1000
+            bearings[:] = np.nan
+            for a in range(360):
+                if np.isnan(self.scan[a]):
+                    continue
+                x = self.scan[a] * np.cos(a* 2 * np.pi/360 + self.init_orientation)
+                y = self.scan[a] * np.sin(a* 2 * np.pi/360 + self.init_orientation)
+                newtheta = int(360*(-self.init_orientation+np.arctan2(y-self.particles[p,1],x-self.particles[p,0]))/(2*np.pi))
+                newrange = np.sqrt((y-self.particles[p,1])**2 + (x-self.particles[p,0])**2)
+                if a == 90:
+                    print("X=", x, y, self.scan[a], scan[a], newtheta, newrange)
+                    print("S=", p, self.particles[p])
+                #print("NewTHeta=", newtheta)
+                if np.isnan(bearings[newtheta]):
+                    bearings[newtheta] = newrange
+                else:
+                    if newrange < bearings[newtheta]:
+                        bearings[newtheta] = newrange
+            print("BEAR=", bearings[90])
             roll = self.init_orientation - self.particles[p, 2]
+#            roll = -self.particles[p, 2]
+#            roll = 0.0
             new = np.roll(scan, -int(roll*360/(2 * np.pi)))
-            diff = (new - self.scan)**2
+            diff = (new - bearings)**2
             sum = np.nansum(diff)
             if sum < min:
                 min = sum
                 idx = p
-        self.particles = np.tile(np.array([0.0, 0.0, self.particles[idx, 2]]), reps=(self.num_particles, 1))
+        print("IDX=", idx)
+        self.particles = np.tile(np.array([self.particles[idx, 0], self.particles[idx, 1], self.particles[idx, 2]]), reps=(self.num_particles, 1))
 
 
     def expected_pose(self):
