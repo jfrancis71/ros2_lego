@@ -61,7 +61,7 @@ class SLAM:
         self.particles[:, :-1] = old_particles
         self.particles[:,-1] = particles
         predictions = self.laser_pred()
-        logprobs_particles = self.laser_probs(predictions)
+        logprobs_particles = self.laser_probs(predictions, self.scans[-1])
         probs = np.exp(logprobs_particles)
         norm_probs = probs/probs.sum()
         self.particles[:, -1] = self.resample_particles(self.particles[:,-1], norm_probs)
@@ -138,10 +138,10 @@ size=self.num_particles, p=probs)
                     predictions[p, a] = ranges[a][0]
         return predictions
 
-    def laser_probs(self, predictions):
+    def laser_probs(self, predictions, scan):
         probs = np.zeros([self.num_particles])
         for p in range(self.num_particles):
-            probs[p] = np.nansum(norm.logpdf(self.scans[-1], loc=predictions[p], scale=0.1))
+            probs[p] = np.nansum(norm.logpdf(scan, loc=predictions[p], scale=0.1))
         return probs/1000
 
 
