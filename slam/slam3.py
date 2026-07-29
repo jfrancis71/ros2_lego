@@ -50,9 +50,7 @@ class SLAM:
 
     def init(self, raw_scan, current_odom_pose):
         self.scans.append(np.array(skimage.transform.resize(raw_scan.astype(np.float32), (self.num_angles,))))
-        print("SELF=", self.scans[0][90])
         self.odom_poses.append(current_odom_pose)
-
 
     def update(self, scan, previous_odom_pose, current_odom_pose):
         self.scans.append(np.array(skimage.transform.resize(scan.astype(np.float32), (self.num_angles,))))
@@ -62,7 +60,8 @@ class SLAM:
         self.particles = np.zeros([self.num_particles, old_particles.shape[1]+1, 3])
         self.particles[:, :-1] = old_particles
         self.particles[:,-1] = particles
-        logprobs_particles = self.laser_pred()
+        predictions = self.laser_pred()
+        logprobs_particles = self.laser_probs(predictions)
         probs = np.exp(logprobs_particles)
         norm_probs = probs/probs.sum()
         self.particles[:, -1] = self.resample_particles(self.particles[:,-1], norm_probs)
@@ -72,8 +71,6 @@ class SLAM:
 size=self.num_particles, p=probs)
         resampled_particles = particles[resampled_particle_indices]
         return resampled_particles
-
-
 
     def extend(self):
         alpha1 = 0.15
@@ -113,18 +110,8 @@ size=self.num_particles, p=probs)
         _, angle, _ = vonmises.fit(self.particles[:, -1, 2], fscale=1)
         return x_mean, y_mean, angle
 
-    def laser_pred1(self):
-        probs = np.zeros([self.num_particles])
-        for p in range(self.num_particles):
-            diff_angle = self.particles[p, -1, 2] - self.particles[p, 0, 2]
-            angles = (360 * diff_angle / (2*np.pi)).astype(np.int32)
-            logs = np.nansum(norm.logpdf(np.roll(self.scans[-1], angles), loc=self.scans[0], scale=0.1))
-            print("logs", logs)
-            probs[p] = logs
-        return probs/1000
-
     def laser_pred(self):
-        probs = np.zeros([self.num_particles])
+        predictions = np.zeros([self.num_particles, 360])
         for p in range(self.num_particles):
             ranges = [ [] for _ in range(360)]
             for a in range(360):
@@ -142,24 +129,20 @@ size=self.num_particles, p=probs)
                 R = np.sqrt(xp*xp + yp*yp)
                 THETA = np.arctan2(yp, xp) - self.particles[p, -1, 2]
                 idx = int(THETA*360/(2*np.pi)) % 360
-                if a == 90:
-                    print("THETA=", THETA, idx)
-                    print("SC=",self.scans[0][a])
-                    print("x,y=", x, y, "R=", R, idx, "scan=", self.scans[-1][90])
-                    print("xp,yp=", xp, yp, np.arctan2(yp, xp))
-                    print("part=", self.particles[p, -1, 0])
-
                 ranges[idx].append(R)
             for a in range(360):
                 if ranges[a] == []:
-                    ranges[a] = np.nan
+                    predictions[p, a] = np.nan
                 else:
                     ranges[a].sort()
-                    ranges[a] = ranges[a][0]
-            probs[p] = np.nansum(norm.logpdf(self.scans[-1], loc=ranges, scale=0.1))
-        print("PROBS=", probs)
-        return probs/1000
+                    predictions[p, a] = ranges[a][0]
+        return predictions
 
+    def laser_probs(self, predictions):
+        probs = np.zeros([self.num_particles])
+        for p in range(self.num_particles):
+            probs[p] = np.nansum(norm.logpdf(self.scans[-1], loc=predictions[p], scale=0.1))
+        return probs/1000
 
 
 class SLAMNode(Node):
