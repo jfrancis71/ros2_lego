@@ -113,30 +113,51 @@ size=self.num_particles, p=probs)
     def laser_pred(self):
         predictions = np.zeros([self.num_particles, 360])
         for p in range(self.num_particles):
-            ranges = [ [] for _ in range(360)]
-            for a in range(360):
-                if np.isnan(self.scans[0][a]):
-                    continue
-                x = self.scans[0][a] * np.cos(a*2*np.pi/360 - np.pi/2)
-                y = self.scans[0][a] * np.sin(a*2*np.pi/360 - np.pi/2)
-                xp = x - self.particles[p, -1, 0]
-                yp = y - self.particles[p, -1, 1]
-                na = a*2*np.pi/360 + self.particles[p, -1, 2]
-                X = xp * np.cos(na) + yp * np.sin(na)
-                Y = -xp * np.sin(na) + yp * np.cos(na)
-                R = np.sqrt(X*X + Y*Y)
-                THETA = np.arctan2(Y, X)
-                R = np.sqrt(xp*xp + yp*yp)
-                THETA = np.arctan2(yp, xp) - self.particles[p, -1, 2]
-                idx = int(THETA*360/(2*np.pi)) % 360
-                ranges[idx].append(R)
-            for a in range(360):
-                if ranges[a] == []:
-                    predictions[p, a] = np.nan
-                else:
-                    ranges[a].sort()
-                    predictions[p, a] = ranges[a][0]
+            pt = np.zeros([360, self.particles.shape[1]-1])
+            for t in range(self.particles.shape[1]-1):
+#                if self.interior(self.scans[t], self.particles[p, t], self.particles[p,-1]) == 1:
+                pt[:, 0] = self.pred(self.scans[0], self.particles[p, 0], self.particles[p, -1])
+#                else:
+#                    pt[:, t] = np.nan
+#            predictions[p] = np.nanmean(pt, axis=1)
+            predictions[p] = pt[:, 0]
         return predictions
+
+    def interior(self, scan, scan_pose, query_pose):
+        xp = scan_pose[0] - query_pose[0]
+        yp = scan_pose[1] - query_pose[1]
+        R = np.sqrt(xp*xp + yp*yp)
+        if R < .5:
+            return 1
+        else:
+            return 0
+
+    # Computes range predictions from the initial pose to a query pose
+    def pred(self, scan, scan_pose, query_pose):
+        ranges = [ [] for _ in range(360)]
+        for a in range(360):
+            if np.isnan(scan[a]):
+                continue
+            x = scan_pose[0] + scan[a] * np.cos(a*2*np.pi/360 + scan_pose[2])
+            y = scan_pose[1] + scan[a] * np.sin(a*2*np.pi/360 + scan_pose[2])
+            xp = x - query_pose[0]
+            yp = y - query_pose[1]
+            na = a*2*np.pi/360 + query_pose[2]
+            X = xp * np.cos(na) + yp * np.sin(na)
+            Y = -xp * np.sin(na) + yp * np.cos(na)
+            R = np.sqrt(X*X + Y*Y)
+            THETA = np.arctan2(Y, X)
+            R = np.sqrt(xp*xp + yp*yp)
+            THETA = np.arctan2(yp, xp) - query_pose[2]
+            idx = int(THETA*360/(2*np.pi)) % 360
+            ranges[idx].append(R)
+        for a in range(360):
+            if ranges[a] == []:
+                ranges[a] = np.nan
+            else:
+                ranges[a].sort()
+                ranges[a] = ranges[a][0]
+        return ranges
 
     def laser_probs(self, predictions, scan):
         probs = np.zeros([self.num_particles])
@@ -204,7 +225,7 @@ class SLAMNode(Node):
         marker.pose.orientation.w = 1.0
         marker.scale.x, marker.scale.y, marker.scale.z = 0.03, 0.03, 0.05
         marker.color.r, marker.color.g, marker.color.b, marker.color.a = 0.3, 1.0, 1.0, .2
-        particles_base_laser = np.matmul(self.particles[:, -1, :2] - pose[:2], R.from_rotvec([0, 0, -pose[2]]).as_matrix()[:2, :2])
+        particles_base_laser = np.matmul(self.slam.particles[:, -1, :2] - pose[:2], R.from_rotvec([0, 0, -pose[2]]).as_matrix()[:2, :2])
         marker.points = [Point(x=x,y=y) for (x, y) in particles_base_laser.tolist()]
         marker.frame_locked = True
         self.marker_pdf_publisher.publish(marker)
@@ -218,7 +239,7 @@ class SLAMNode(Node):
 
     def publish_ros2(self, tf_base_laser_to_odom, pose):
         self.publish_map_odom_transform(tf_base_laser_to_odom, pose)
-#        self.publish_particles(pose)
+        self.publish_particles(pose)
 
     def robot_moved(self, current_odom_pose):
         diff_x = current_odom_pose[0] - self.previous_odom_pose[0]
