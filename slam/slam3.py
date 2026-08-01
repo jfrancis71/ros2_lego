@@ -40,7 +40,7 @@ def angle_diff(angle_1, angle_2):
 
 class SLAM:
     def __init__(self):
-        self.num_particles = 30
+        self.num_particles = 300
         self.num_angles = 360
         self.particles = np.tile(np.array([0.0, 0.0, -0.5 * np.pi]), reps=(self.num_particles, 1, 1))
         # shape N, T, P where N is particle no, T is time, P is pose shape
@@ -64,6 +64,7 @@ class SLAM:
         logprobs_particles = self.laser_probs(predictions, self.scans[-1])
         probs = np.exp(logprobs_particles)
         norm_probs = probs/probs.sum()
+        print("PROBS=", self.particles[:, -1], norm_probs)
         self.particles[:, -1] = self.resample_particles(self.particles[:,-1], norm_probs)
 
     def resample_particles(self, particles, probs):
@@ -116,11 +117,11 @@ size=self.num_particles, p=probs)
             pt = np.zeros([360, self.particles.shape[1]-1])
             for t in range(self.particles.shape[1]-1):
 #                if self.interior(self.scans[t], self.particles[p, t], self.particles[p,-1]) == 1:
-                pt[:, 0] = self.pred(self.scans[0], self.particles[p, 0], self.particles[p, -1])
+                pt[:, t] = self.pred(self.scans[t], self.particles[p, t], self.particles[p, -1])
 #                else:
 #                    pt[:, t] = np.nan
-#            predictions[p] = np.nanmean(pt, axis=1)
-            predictions[p] = pt[:, 0]
+            predictions[p] = np.nanmean(pt, axis=1)
+#            predictions[p] = pt[:, 0]
         return predictions
 
     def interior(self, scan, scan_pose, query_pose):
