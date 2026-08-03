@@ -40,7 +40,7 @@ def angle_diff(angle_1, angle_2):
 
 class SLAM:
     def __init__(self):
-        self.num_particles = 300
+        self.num_particles = 240
         self.num_angles = 360
         self.particles = np.tile(np.array([0.0, 0.0, -0.5 * np.pi]), reps=(self.num_particles, 1, 1))
         # shape N, T, P where N is particle no, T is time, P is pose shape
@@ -75,7 +75,7 @@ size=self.num_particles, p=probs)
 
     def extend(self):
         alpha1 = 0.15
-        alpha1 = 0.25
+#        alpha1 = 0.25
         alpha3 = 0.05
         t = len(self.odom_poses)-1
         previous_odom_pose = self.odom_poses[t-1]
@@ -93,17 +93,17 @@ size=self.num_particles, p=probs)
         sample_d_rot1 = d_rot1 + sp1*diff_angle *alpha1
         sample_d_trans = d_trans + sp2*d_trans* alpha3
         sample_d_rot2 = d_rot2 + sp3*diff_angle *alpha1
-        sample_d_rot1 = 0.0 + sp1
-        sample_d_trans = 0.0 + sp2*d_trans* alpha3
-        sample_d_rot2 = 0.0 + sp3
+#        sample_d_rot1 = 0.0 + sp1
+#        sample_d_trans = 0.0 + sp2*d_trans* alpha3
+#        sample_d_rot2 = 0.0 + sp3
         particles = np.zeros([self.num_particles, 3])
         print("PART SHAPE=", self.particles.shape, "T=", t)
-#        particles[:, 0] = self.particles[:, t-1, 0] + sample_d_trans * np.cos(self.particles[:, t-1, 2] + sample_d_rot1)
-#        particles[:, 1] = self.particles[:, t-1, 1] + sample_d_trans * np.sin(self.particles[:, t-1, 2] + sample_d_rot1)
-#        particles[:,  2] = self.particles[:, t-1, 2] + sample_d_rot1 + sample_d_rot2
-        particles[:, 0] = self.particles[:, t-1, 0] + sp1*.1
-        particles[:, 1] = self.particles[:, t-1, 1] + sp2*.1
-        particles[:,  2] = self.particles[:, t-1, 2] + sp3*.5
+        particles[:, 0] = self.particles[:, t-1, 0] + sample_d_trans * np.cos(self.particles[:, t-1, 2] + sample_d_rot1)
+        particles[:, 1] = self.particles[:, t-1, 1] + sample_d_trans * np.sin(self.particles[:, t-1, 2] + sample_d_rot1)
+        particles[:,  2] = self.particles[:, t-1, 2] + sample_d_rot1 + sample_d_rot2
+#        particles[:, 0] = self.particles[:, t-1, 0] + sp1*.1
+#        particles[:, 1] = self.particles[:, t-1, 1] + sp2*.1
+#        particles[:,  2] = self.particles[:, t-1, 2] + sp3*.5
         return particles, tprobs
 
     def expected_pose(self):
@@ -114,14 +114,8 @@ size=self.num_particles, p=probs)
     def laser_pred(self):
         predictions = np.zeros([self.num_particles, 360])
         for p in range(self.num_particles):
-            pt = np.zeros([360, self.particles.shape[1]-1])
-            for t in range(self.particles.shape[1]-1):
-#                if self.interior(self.scans[t], self.particles[p, t], self.particles[p,-1]) == 1:
-                pt[:, t] = self.pred(self.scans[t], self.particles[p, t], self.particles[p, -1])
-#                else:
-#                    pt[:, t] = np.nan
-            predictions[p] = np.nanmean(pt, axis=1)
-#            predictions[p] = pt[:, 0]
+            rel_node = self.select(p, self.particles[p, -1])
+            predictions[p] = self.pred(self.scans[rel_node], self.particles[p, rel_node], self.particles[p, -1])
         return predictions
 
     def interior(self, scan, scan_pose, query_pose):
@@ -132,6 +126,16 @@ size=self.num_particles, p=probs)
             return 1
         else:
             return 0
+
+    def select(self, particle_idx, particle):  # We discretise pose to 1m and ask for pose closest to this
+        min_dist = 10000
+        for t in range(self.particles.shape[1]):
+            dist = np.sqrt( (self.particles[particle_idx, t, 0]-int(particle[0]))**2 + (self.particles[particle_idx, t, 1] - int(particle[1]))**2)
+            if dist < min_dist:
+                min_dist = dist
+                idx = t
+        return idx
+
 
     # Computes range predictions from the initial pose to a query pose
     def pred(self, scan, scan_pose, query_pose):
@@ -268,7 +272,6 @@ class SLAMNode(Node):
                 lidar_msg_time)
         except TransformException as ex:  # This is common and normal.
             return
-
         self.process_lidar(self.current_lidar_msg, tf_base_laser_to_odom, tf_odom_to_base_laser)
         self.current_lidar_msg = None
 
