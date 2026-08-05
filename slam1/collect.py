@@ -55,6 +55,19 @@ class SLAM:
     def update(self, scan, previous_odom_pose, current_odom_pose):
         self.particles = self.extend(previous_odom_pose, current_odom_pose)
 
+    def update1(self, scan, robot_frame_odom):
+        self.particles = self.extend1(robot_frame_odom)
+
+    def extend1(self, robot_frame_odom):
+        particles = np.zeros([self.num_particles, 3])
+        particles[:, 0] = self.particles[:, 0] + robot_frame_odom[0] * np.cos(self.particles[:, 2]) + robot_frame_odom[1] * np.sin(self.particles[:, 2])
+        particles[:, 1] = self.particles[:, 1] + robot_frame_odom[0] * np.cos(self.particles[:, 2] + np.pi/2) + robot_frame_odom[1] * np.sin(self.particles[:, 2] + np.pi/2)
+
+        particles[:, 0] = self.particles[:, 0] + robot_frame_odom[0] * np.cos(self.particles[:, 2]) + robot_frame_odom[1] * np.cos(self.particles[:, 2] + np.pi/2)
+        particles[:, 1] = self.particles[:, 1] + robot_frame_odom[0] * np.sin(self.particles[:, 2]) + robot_frame_odom[1] * np.sin(self.particles[:, 2] + np.pi/2)
+        particles[:, 2] = self.particles[:, 2] + robot_frame_odom[2]
+        return particles
+
     def extend(self, previous_odom_pose, current_odom_pose):
         alpha1 = 0.15
         alpha3 = 0.05
@@ -108,6 +121,17 @@ class SLAMNode(Node):
 , 1)
 
         self.slam = SLAM()
+
+    def robot_frame_odom(self, previous_odom_pose, current_odom_pose):
+        diff_x = current_odom_pose[0] - previous_odom_pose[0]
+        diff_y = current_odom_pose[1] - previous_odom_pose[1]
+        forward = diff_x * np.cos(previous_odom_pose[2]) + diff_y * np.sin(previous_odom_pose[2])
+        slip = diff_x * np.cos(previous_odom_pose[2] + np.pi/2) + diff_y * np.sin(previous_odom_pose[2] + np.pi/2)
+        diff_angle = angle_diff(current_odom_pose[2], previous_odom_pose[2])
+        d_rot = current_odom_pose[2] - previous_odom_pose[2]
+        print("forward=", forward, " slip=", slip, d_rot)
+        return forward, slip, d_rot
+
 
     def publish_map_odom_transform(self, tf_base_laser_to_odom, pose):
         tf_zero_to_odom = TransformStamped()
@@ -194,7 +218,8 @@ class SLAMNode(Node):
         if self.previous_odom_pose is None:
             self.previous_odom_pose = current_odom_pose
         if self.robot_moved(current_odom_pose):
-            self.slam.update(np.array(lidar_msg.ranges), self.previous_odom_pose, current_odom_pose)
+            robot_frame_odom = self.robot_frame_odom(self.previous_odom_pose, current_odom_pose)
+            self.slam.update1(np.array(lidar_msg.ranges), robot_frame_odom)
             self.previous_odom_pose = current_odom_pose
         pose = self.slam.expected_pose()
         self.publish_ros2(tf_base_laser_to_odom, pose)
