@@ -27,6 +27,7 @@ import time
 import message_filters
 from nav_msgs.msg import OccupancyGrid
 import atexit
+import random
 
 
 def angle_diff(angle_1, angle_2):
@@ -53,9 +54,15 @@ class SLAM:
 
     def rollout(self):
         self.particles = np.tile(np.array([0.0, 0.0, -0.5 * np.pi]), reps=(self.num_particles, self.odom.shape[0], 1))
-        for i in range(self.odom.shape[0]-1):
+        for t in range(1, self.odom.shape[0]):
 #            print("odom=", self.odom[i])
-            self.particles[:, 1+i] = self.extend(self.particles[:, i], self.odom[i])
+            self.particles[:, t] = self.extend(self.particles[:, t-1], self.odom[t-1])
+            predictions = self.laser_pred(t)
+            logprobs_particles = self.laser_probs(predictions, self.scans[t])
+            probs = np.exp(logprobs_particles)
+            norm_probs = probs/probs.sum()
+            self.particles[:, t] = self.resample_particles(self.particles[:,t], norm_probs)
+
 
     def update(self, scan, robot_frame_odom):
         particles = self.extend(robot_frame_odom)
@@ -100,7 +107,7 @@ size=self.num_particles, p=probs)
     def laser_pred(self, t):
         predictions = np.zeros([self.num_particles, 360])
         for p in range(self.num_particles):
-            rel_node = self.select(p, self.particles[p, t])
+            rel_node = self.select(p, self.particles[p, t], t)
             predictions[p] = self.pred(self.scans[rel_node], self.particles[p, rel_node], self.particles[p, t])
         return predictions
 
@@ -113,9 +120,9 @@ size=self.num_particles, p=probs)
         else:
             return 0
 
-    def select(self, particle_idx, particle):  # We discretise pose to 1m and ask for pose closest to this
+    def select(self, particle_idx, particle, pt):  # We discretise pose to 1m and ask for pose closest to this
         min_dist = 10000
-        for t in range(self.particles.shape[1]):
+        for t in range(pt):
             dist = np.sqrt( (self.particles[particle_idx, t, 0]-int(particle[0]))**2 + (self.particles[particle_idx, t, 1] - int(particle[1]))**2)
             if dist < min_dist:
                 min_dist = dist
@@ -168,6 +175,7 @@ class SLAMNode(Node):
         self.declare_parameter('filename', 'odom.npz')
         filename = self.get_parameter('filename').get_parameter_value().string_value
         self.slam = SLAM(filename)
+        self.colors = [ [random.random(), random.random(), random.random()] for i in range(100)]
 
     def publish_map_odom_transform(self, tf_base_laser_to_odom, pose):
         tf_zero_to_odom = TransformStamped()
@@ -242,6 +250,13 @@ class SLAMNode(Node):
         self.publish_map_odom_transform(tf_base_laser_to_odom, pose)
         self.publish_particles(pose)
 
+    def particle_info(self, particle_idx):
+        positions = np.unique(self.slam.particles[particle_idx, :,:2].astype(np.int32), axis=0)
+        for p in range(positions.shape[0]):
+            ref = self.slam.select(particle_idx, positions[p], self.slam.particles.shape[1])
+            print("Pos=", positions[p], ref)
+            self.publish(str(p), p, self.slam.particles[particle_idx, ref], self.slam.scans[ref], self.colors[p])
+
     def run(self):
         print("Hello")
         best_prob = -1000000
@@ -253,8 +268,7 @@ class SLAMNode(Node):
             if est_prob > best_prob:
                 best_prob = est_prob
                 best_particle = self.slam.particles[idx].copy()
-                self.publish("0", 0, best_particle[0], self.slam.scans[0], [0.3, .7, .2])
-                self.publish("1", 1, best_particle[40], self.slam.scans[40], [0.8, .3, .8])
+                self.particle_info(idx)
                 print(best_particle, best_prob)
 
     def exit(self):
