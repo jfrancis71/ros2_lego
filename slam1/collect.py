@@ -26,6 +26,9 @@ from tf2_ros.buffer import Buffer
 import time
 import message_filters
 from nav_msgs.msg import OccupancyGrid
+#std_srvs/srv/Empty
+from std_srvs.srv import Empty
+import atexit
 
 
 def angle_diff(angle_1, angle_2):
@@ -39,26 +42,24 @@ def angle_diff(angle_1, angle_2):
 
 
 class SLAM:
-    def __init__(self):
+    def __init__(self, filename):
+        self.filename = filename
         self.num_particles = 240
         self.num_angles = 360
         self.particles = np.tile(np.array([0.0, 0.0, -0.5 * np.pi]), reps=(self.num_particles, 1))
         # shape N, P where N is particle no, T is time, P is pose shape
         self.scans = []
-        self.odom_poses = []
+        self.odom_delta = []
 
-    def init(self, raw_scan, current_odom_pose):
+    def init(self, raw_scan):
         self.scans.append(np.array(skimage.transform.resize(raw_scan.astype(np.float32), (self.num_angles,))))
-        self.odom_poses.append(current_odom_pose)
 
+    def update(self, scan, robot_frame_odom):
+        self.particles = self.extend(robot_frame_odom)
+        self.scans.append(np.array(skimage.transform.resize(scan.astype(np.float32), (self.num_angles,))))
+        self.odom_delta.append(robot_frame_odom)
 
-    def update(self, scan, previous_odom_pose, current_odom_pose):
-        self.particles = self.extend(previous_odom_pose, current_odom_pose)
-
-    def update1(self, scan, robot_frame_odom):
-        self.particles = self.extend1(robot_frame_odom)
-
-    def extend1(self, robot_frame_odom):
+    def extend(self, robot_frame_odom):
         particles = np.zeros([self.num_particles, 3])
         particles[:, 0] = self.particles[:, 0] + robot_frame_odom[0] * np.cos(self.particles[:, 2]) + robot_frame_odom[1] * np.sin(self.particles[:, 2])
         particles[:, 1] = self.particles[:, 1] + robot_frame_odom[0] * np.cos(self.particles[:, 2] + np.pi/2) + robot_frame_odom[1] * np.sin(self.particles[:, 2] + np.pi/2)
@@ -68,31 +69,13 @@ class SLAM:
         particles[:, 2] = self.particles[:, 2] + robot_frame_odom[2]
         return particles
 
-    def extend(self, previous_odom_pose, current_odom_pose):
-        alpha1 = 0.15
-        alpha3 = 0.05
-        diff_x = current_odom_pose[0] - previous_odom_pose[0]
-        diff_y = current_odom_pose[1] - previous_odom_pose[1]
-        d_rot1 = np.arctan2(diff_y, diff_x) - previous_odom_pose[2]
-        d_trans = np.sqrt(diff_y**2 + diff_x**2)
-        d_rot2 = current_odom_pose[2] - previous_odom_pose[2] - d_rot1
-        diff_angle = angle_diff(current_odom_pose[2], previous_odom_pose[2])
-        sp1 = np.random.normal(size=self.num_particles)
-        sp2 = np.random.normal(size=self.num_particles)
-        sp3 = np.random.normal(size=self.num_particles)
-        sample_d_rot1 = d_rot1 + sp1*diff_angle *alpha1
-        sample_d_trans = d_trans + sp2*d_trans* alpha3
-        sample_d_rot2 = d_rot2 + sp3*diff_angle *alpha1
-        particles = np.zeros([self.num_particles, 3])
-        particles[:, 0] = self.particles[:, 0] + sample_d_trans * np.cos(self.particles[:, 2] + sample_d_rot1)
-        particles[:, 1] = self.particles[:, 1] + sample_d_trans * np.sin(self.particles[:, 2] + sample_d_rot1)
-        particles[:,  2] = self.particles[:, 2] + sample_d_rot1 + sample_d_rot2
-        return particles
-
     def expected_pose(self):
         x_mean, y_mean, _ = np.mean(self.particles, axis=0)
         _, angle, _ = vonmises.fit(self.particles[:, 2], fscale=1)
         return x_mean, y_mean, angle
+
+    def save(self):
+        np.savez(self.filename, odom=np.array(self.odom_delta), scans=np.array(self.scans))
 
 
 class SLAMNode(Node):
@@ -119,8 +102,10 @@ class SLAMNode(Node):
         self.init_wait = 0
         self.marker_pdf_publisher = self.create_publisher(Marker, '/particles_marker'
 , 1)
-
-        self.slam = SLAM()
+        self.save_srv = self.create_service(Empty, 'collector', self.save_callback)
+        self.declare_parameter('filename', 'odom.npz')
+        filename = self.get_parameter('filename').get_parameter_value().string_value
+        self.slam = SLAM(filename)
 
     def robot_frame_odom(self, previous_odom_pose, current_odom_pose):
         diff_x = current_odom_pose[0] - previous_odom_pose[0]
@@ -131,6 +116,11 @@ class SLAMNode(Node):
         d_rot = current_odom_pose[2] - previous_odom_pose[2]
         print("forward=", forward, " slip=", slip, d_rot)
         return forward, slip, d_rot
+
+
+    def save_callback(self, request, response):
+        self.slam.save()
+        return response
 
 
     def publish_map_odom_transform(self, tf_base_laser_to_odom, pose):
@@ -212,14 +202,14 @@ class SLAMNode(Node):
         scan = np.array(lidar_msg.ranges)
         current_odom_pose = self.ros2_to_pose(tf_odom_to_base_laser)
         if self.init_wait == 10:
-            self.slam.init(scan, current_odom_pose)
+            self.slam.init(scan)
             self.init_wait += 1
             return
         if self.previous_odom_pose is None:
             self.previous_odom_pose = current_odom_pose
         if self.robot_moved(current_odom_pose):
             robot_frame_odom = self.robot_frame_odom(self.previous_odom_pose, current_odom_pose)
-            self.slam.update1(np.array(lidar_msg.ranges), robot_frame_odom)
+            self.slam.update(np.array(lidar_msg.ranges), robot_frame_odom)
             self.previous_odom_pose = current_odom_pose
         pose = self.slam.expected_pose()
         self.publish_ros2(tf_base_laser_to_odom, pose)
@@ -227,6 +217,7 @@ class SLAMNode(Node):
 
 rclpy.init()
 slam_node = SLAMNode()
+atexit.register(slam_node.slam.save)
 rclpy.spin(slam_node)
 slam_node.destroy_node()
 rclpy.shutdown()
