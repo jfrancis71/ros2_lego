@@ -28,6 +28,7 @@ import message_filters
 from nav_msgs.msg import OccupancyGrid
 import atexit
 import random
+from std_msgs.msg import ColorRGBA
 
 
 def angle_diff(angle_1, angle_2):
@@ -50,7 +51,7 @@ class SLAM:
         self.scans = data["scans"]
         self.particles = np.tile(np.array([0.0, 0.0, -0.5 * np.pi]), reps=(self.num_particles, self.odom.shape[0], 1))
         # shape N, T, P where N is particle no, T is time, P is pose shape
-        print("Scans=", self.scans)
+        print("Scans=", self.odom)
 
     def rollout(self):
         self.particles = np.tile(np.array([0.0, 0.0, -0.5 * np.pi]), reps=(self.num_particles, self.odom.shape[0], 1))
@@ -85,9 +86,13 @@ size=self.num_particles, p=probs)
         sample_slide = slide + .1*sp2*slide
         spin = robot_frame_odom[2]
         sample_spin = spin + .1*sp3*spin
-        particles[:, 0] = last_particles[:, 0] + sample_forward * np.cos(self.particles[:, -1, 2]) + sample_slide * np.cos(self.particles[:, -1, 2] + np.pi/2)
-        particles[:, 1] = last_particles[:, 1] + sample_forward * np.sin(self.particles[:, -1, 2]) + sample_slide * np.sin(self.particles[:, -1, 2] + np.pi/2)
+        particles[:, 0] = last_particles[:, 0] + sample_forward * np.cos(last_particles[:, 2]) + sample_slide * np.cos(last_particles[:, 2] + np.pi/2)
+        particles[:, 1] = last_particles[:, 1] + sample_forward * np.sin(last_particles[:, 2]) + sample_slide * np.sin(last_particles[:, 2] + np.pi/2)
         particles[:, 2] = last_particles[:, 2] + sample_spin
+#        particles[:, 0] = last_particles[:, 0] + sp1*.1
+#        particles[:, 1] = last_particles[:, 1] + sp2*.1
+#        particles[:, 2] = last_particles[:, 2] + sp3*.2
+
         return particles
 
     def likelihood(self):
@@ -171,11 +176,12 @@ class SLAMNode(Node):
         self.min_dist = 0.03  # minimum distance for lidar update
         self.min_angle = .08  # minimum angle change for lidar update
         self.marker_pdf_publisher = self.create_publisher(Marker, '/particles_marker', 1)
+        self.path_publisher = self.create_publisher(Marker, '/path_marker', 1)
         self.init_wait = 0
         self.declare_parameter('filename', 'odom.npz')
         filename = self.get_parameter('filename').get_parameter_value().string_value
         self.slam = SLAM(filename)
-        self.colors = [ [random.random(), random.random(), random.random()] for i in range(100)]
+        self.colors = [ [random.random(), random.random(), random.random(), 1.0] for i in range(100)]
 
     def publish_map_odom_transform(self, tf_base_laser_to_odom, pose):
         tf_zero_to_odom = TransformStamped()
@@ -209,22 +215,11 @@ class SLAMNode(Node):
         marker.color.r, marker.color.g, marker.color.b, marker.color.a = 0.3, 1.0, 1.0, .2
         particles_base_laser = np.matmul(self.slam.particles[:, -1, :2] - pose[:2], R.from_rotvec([0, 0, -pose[2]]).as_matrix()[:2, :2])
         marker.points = [Point(x=x,y=y) for (x, y) in particles_base_laser.tolist()]
+        marker.colors = [ [0.3, .6, .8] for _ in particles_base_laser.tolist()]
         marker.frame_locked = True
         self.marker_pdf_publisher.publish(marker)
 
-    def publish(self, name, id, particle, scan, color):
-        marker = Marker()
-        marker.header.stamp = self.get_clock().now().to_msg()
-        marker.header.frame_id = "map"
-        marker.ns = "d"
-        marker.id = id
-        marker.type = Marker.POINTS
-        marker.action = Marker.ADD
-        marker.pose.position.x, marker.pose.position.y, marker.pose.position.z = 0.0, 0.0, 0.0
-        marker.pose.orientation.x, marker.pose.orientation.y, marker.pose.orientation.z = 0.0, 0.0, 0.0
-        marker.pose.orientation.w = 1.0
-        marker.scale.x, marker.scale.y, marker.scale.z = 0.03, 0.03, 0.05
-        marker.color.r, marker.color.g, marker.color.b, marker.color.a = color[0], color[1], color[2], 1.0
+    def create_points(self, particle, scan):
         mylist = []
         for b in range(360):
             x = np.cos(b*2*np.pi/360 + particle[2])*scan[b] + particle[0]
@@ -233,10 +228,48 @@ class SLAMNode(Node):
                 pass
             else:
                 mylist.append([x,y])
+        return mylist
 
-        marker.points = [Point(x=x,y=y) for (x,y) in mylist]
+
+    def publish(self, flat_points, flat_colors):
+        marker = Marker()
+        marker.header.stamp = self.get_clock().now().to_msg()
+        marker.header.frame_id = "map"
+        marker.ns = "0"
+        marker.id = 0
+        marker.type = Marker.POINTS
+        marker.action = Marker.ADD
+        marker.pose.position.x, marker.pose.position.y, marker.pose.position.z = 0.0, 0.0, 0.0
+        marker.pose.orientation.x, marker.pose.orientation.y, marker.pose.orientation.z = 0.0, 0.0, 0.0
+        marker.pose.orientation.w = 1.0
+        marker.scale.x, marker.scale.y, marker.scale.z = 0.03, 0.03, 0.05
+#        marker.color.r, marker.color.g, marker.color.b, marker.color.a = color[0], color[1], color[2], 1.0
+        marker.points = [Point(x=x,y=y) for (x,y) in flat_points]
+        marker.colors = [ColorRGBA(r=r, g=g, b=b, a=a) for (r,g,b,a) in flat_colors]
         marker.frame_locked = True
         self.marker_pdf_publisher.publish(marker)
+
+    def publish_path(self, poses):
+        marker = Marker()
+        marker.header.stamp = self.get_clock().now().to_msg()
+        marker.header.frame_id = "map"
+        marker.ns = "0"
+        marker.id = 0
+        marker.type = Marker.LINE_STRIP
+        marker.action = Marker.ADD
+        marker.pose.position.x, marker.pose.position.y, marker.pose.position.z = 0.0, 0.0, 0.0
+        marker.pose.orientation.x, marker.pose.orientation.y, marker.pose.orientation.z = 0.0, 0.0, 0.0
+        marker.pose.orientation.w = 1.0
+        marker.scale.x, marker.scale.y, marker.scale.z = 0.03, 0.03, 0.05
+#        marker.color.r, marker.color.g, marker.color.b, marker.color.a = r[0], color[1], color[2], 1.0
+        marker.color.a = 1.0
+        marker.color.r = 1.0
+#        marker.points = [Point(x=x,y=y) for (x,y) in flat_points]
+        marker.points = [Point(x=3.,y=4.)]
+        marker.points = [Point(x=x,y=y) for (x,y,theta) in poses]
+        print("MY MARKER POINTS=", marker.points)
+        marker.frame_locked = True
+        self.path_publisher.publish(marker)
 
 
     def ros2_to_pose(self, odom_transform):
@@ -252,10 +285,16 @@ class SLAMNode(Node):
 
     def particle_info(self, particle_idx):
         positions = np.unique(self.slam.particles[particle_idx, :,:2].astype(np.int32), axis=0)
+        flat_points = []
+        flat_colors = []
         for p in range(positions.shape[0]):
             ref = self.slam.select(particle_idx, positions[p], self.slam.particles.shape[1])
             print("Pos=", positions[p], ref)
-            self.publish(str(p), p, self.slam.particles[particle_idx, ref], self.slam.scans[ref], self.colors[p])
+            points = self.create_points(self.slam.particles[particle_idx, ref], self.slam.scans[ref])
+            for point in points:
+                flat_points.append(point)
+                flat_colors.append(self.colors[p])
+        self.publish(flat_points, flat_colors)
 
     def run(self):
         print("Hello")
@@ -268,6 +307,7 @@ class SLAMNode(Node):
             if est_prob > best_prob:
                 best_prob = est_prob
                 best_particle = self.slam.particles[idx].copy()
+                self.publish_path(best_particle)
                 self.particle_info(idx)
                 print(best_particle, best_prob)
 
