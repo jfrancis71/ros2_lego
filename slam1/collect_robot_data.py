@@ -118,14 +118,14 @@ class RobotDataCollectorNode(Node):
         scan = np.array(lidar_msg.ranges).astype(np.float32)
         current_odom_pose = self.ros2_to_pose(tf_odom_to_base_laser)
         if self.init_wait == 10:
-            self.scans.append(np.array(skimage.transform.resize(scan, (self.num_angles,))))
+            self.scans.append(skimage.transform.resize(scan, (self.num_angles,)))
             self.init_wait += 1
             return
         if self.previous_odom_pose is None:
             self.previous_odom_pose = current_odom_pose
         if self.robot_moved(current_odom_pose):
             robot_frame_odom = self.robot_frame_odom(self.previous_odom_pose, current_odom_pose)
-            self.scans.append(np.array(skimage.transform.resize(scan, (self.num_angles,))))
+            self.scans.append(skimage.transform.resize(scan, (self.num_angles,)))
             self.odom_delta.append(robot_frame_odom)
             self.previous_odom_pose = current_odom_pose
 
