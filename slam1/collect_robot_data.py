@@ -41,44 +41,7 @@ def angle_diff(angle_1, angle_2):
     return np.min(np.array([abs_diff_angle, 2*np.pi - abs_diff_angle]))
 
 
-class SLAM:
-    def __init__(self, filename):
-        self.filename = filename
-        self.num_particles = 240
-        self.num_angles = 360
-        self.particles = np.tile(np.array([0.0, 0.0, -0.5 * np.pi]), reps=(self.num_particles, 1))
-        # shape N, P where N is particle no, T is time, P is pose shape
-        self.scans = []
-        self.odom_delta = []
-
-    def init(self, raw_scan):
-        self.scans.append(np.array(skimage.transform.resize(raw_scan.astype(np.float32), (self.num_angles,))))
-
-    def update(self, scan, robot_frame_odom):
-        self.particles = self.extend(robot_frame_odom)
-        self.scans.append(np.array(skimage.transform.resize(scan.astype(np.float32), (self.num_angles,))))
-        self.odom_delta.append(robot_frame_odom)
-
-    def extend(self, robot_frame_odom):
-        particles = np.zeros([self.num_particles, 3])
-        particles[:, 0] = self.particles[:, 0] + robot_frame_odom[0] * np.cos(self.particles[:, 2]) + robot_frame_odom[1] * np.sin(self.particles[:, 2])
-        particles[:, 1] = self.particles[:, 1] + robot_frame_odom[0] * np.cos(self.particles[:, 2] + np.pi/2) + robot_frame_odom[1] * np.sin(self.particles[:, 2] + np.pi/2)
-
-        particles[:, 0] = self.particles[:, 0] + robot_frame_odom[0] * np.cos(self.particles[:, 2]) + robot_frame_odom[1] * np.cos(self.particles[:, 2] + np.pi/2)
-        particles[:, 1] = self.particles[:, 1] + robot_frame_odom[0] * np.sin(self.particles[:, 2]) + robot_frame_odom[1] * np.sin(self.particles[:, 2] + np.pi/2)
-        particles[:, 2] = self.particles[:, 2] + robot_frame_odom[2]
-        return particles
-
-    def expected_pose(self):
-        x_mean, y_mean, _ = np.mean(self.particles, axis=0)
-        _, angle, _ = vonmises.fit(self.particles[:, 2], fscale=1)
-        return x_mean, y_mean, angle
-
-    def save(self):
-        np.savez(self.filename, odom=np.array(self.odom_delta), scans=np.array(self.scans))
-
-
-class SLAMNode(Node):
+class RobotDataCollectorNode(Node):
     def __init__(self):
         super().__init__("slam_node")
         self.min_dist = 0.03  # minimum distance for lidar update
@@ -98,14 +61,12 @@ class SLAMNode(Node):
         self.tf_listener = TransformListener(self.tf_buffer, self, spin_thread=True, qos=qos)
         self.current_lidar_msg = None
         self.previous_odom_pose = None
-        self.tf_static_broadcaster = StaticTransformBroadcaster(self)
         self.init_wait = 0
-        self.marker_pdf_publisher = self.create_publisher(Marker, '/particles_marker'
-, 1)
-        self.save_srv = self.create_service(Empty, 'collector', self.save_callback)
         self.declare_parameter('filename', 'odom.npz')
-        filename = self.get_parameter('filename').get_parameter_value().string_value
-        self.slam = SLAM(filename)
+        self.filename = self.get_parameter('filename').get_parameter_value().string_value
+        self.scans = []
+        self.odom_delta = []
+        self.num_angles = 360
 
     def robot_frame_odom(self, previous_odom_pose, current_odom_pose):
         diff_x = current_odom_pose[0] - previous_odom_pose[0]
@@ -117,57 +78,12 @@ class SLAMNode(Node):
         print("forward=", forward, " slip=", slip, d_rot)
         return forward, slip, d_rot
 
-
-    def save_callback(self, request, response):
-        self.slam.save()
-        return response
-
-
-    def publish_map_odom_transform(self, tf_base_laser_to_odom, pose):
-        tf_zero_to_odom = TransformStamped()
-        tf_zero_to_odom.header.stamp = self.current_lidar_msg.header.stamp
-        tf_zero_to_odom.header.frame_id = 'zero'
-        tf_zero_to_odom.child_frame_id = 'odom'
-        tf_zero_to_odom.transform = tf_base_laser_to_odom.transform
-        tf_map_to_zero = TransformStamped()
-        tf_map_to_zero.header.stamp = self.current_lidar_msg.header.stamp
-        tf_map_to_zero.header.frame_id = 'map'
-        tf_map_to_zero.child_frame_id = 'zero'
-        tf_m_to_z_trans = tf_map_to_zero.transform.translation
-        tf_m_to_z_trans.x, tf_m_to_z_trans.y, tf_m_to_z_trans.z = pose[0], pose[1], 0.0
-        q = quaternion_from_euler(0, 0, pose[2])
-        tf_m_to_z_rot = tf_map_to_zero.transform.rotation
-        tf_m_to_z_rot.x, tf_m_to_z_rot.y, tf_m_to_z_rot.z, tf_m_to_z_rot.w = q[0], q[1], q[2], q[3]
-        self.tf_static_broadcaster.sendTransform([tf_zero_to_odom, tf_map_to_zero])
-
-    def publish_particles(self, pose):
-        marker = Marker()
-        marker.header.stamp = self.current_lidar_msg.header.stamp
-        marker.header.frame_id = "base_laser"
-        marker.ns = "basic_shapes"
-        marker.id = 0
-        marker.type = Marker.POINTS
-        marker.action = Marker.ADD
-        marker.pose.position.x, marker.pose.position.y, marker.pose.position.z = 0.0, 0.0, 0.0
-        marker.pose.orientation.x, marker.pose.orientation.y, marker.pose.orientation.z = 0.0, 0.0, 0.0
-        marker.pose.orientation.w = 1.0
-        marker.scale.x, marker.scale.y, marker.scale.z = 0.03, 0.03, 0.05
-        marker.color.r, marker.color.g, marker.color.b, marker.color.a = 0.3, 1.0, 1.0, .2
-        particles_base_laser = np.matmul(self.slam.particles[:, :2] - pose[:2], R.from_rotvec([0, 0, -pose[2]]).as_matrix()[:2, :2])
-        marker.points = [Point(x=x,y=y) for (x, y) in particles_base_laser.tolist()]
-        marker.frame_locked = True
-        self.marker_pdf_publisher.publish(marker)
-
     def ros2_to_pose(self, odom_transform):
         trans_tf = odom_transform.transform.translation
         rot_tf = odom_transform.transform.rotation
         rot = [rot_tf.x, rot_tf.y, rot_tf.z, rot_tf.w]
         _, _, theta = euler_from_quaternion(rot)
         return (trans_tf.x, trans_tf.y, theta)
-
-    def publish_ros2(self, tf_base_laser_to_odom, pose):
-        self.publish_map_odom_transform(tf_base_laser_to_odom, pose)
-        self.publish_particles(pose)
 
     def robot_moved(self, current_odom_pose):
         diff_x = current_odom_pose[0] - self.previous_odom_pose[0]
@@ -199,25 +115,27 @@ class SLAMNode(Node):
         self.current_lidar_msg = None
 
     def process_lidar(self, lidar_msg, tf_base_laser_to_odom, tf_odom_to_base_laser):
-        scan = np.array(lidar_msg.ranges)
+        scan = np.array(lidar_msg.ranges).astype(np.float32)
         current_odom_pose = self.ros2_to_pose(tf_odom_to_base_laser)
         if self.init_wait == 10:
-            self.slam.init(scan)
+            self.scans.append(np.array(skimage.transform.resize(scan, (self.num_angles,))))
             self.init_wait += 1
             return
         if self.previous_odom_pose is None:
             self.previous_odom_pose = current_odom_pose
         if self.robot_moved(current_odom_pose):
             robot_frame_odom = self.robot_frame_odom(self.previous_odom_pose, current_odom_pose)
-            self.slam.update(np.array(lidar_msg.ranges), robot_frame_odom)
+            self.scans.append(np.array(skimage.transform.resize(scan, (self.num_angles,))))
+            self.odom_delta.append(robot_frame_odom)
             self.previous_odom_pose = current_odom_pose
-        pose = self.slam.expected_pose()
-        self.publish_ros2(tf_base_laser_to_odom, pose)
+
+    def save(self):
+        np.savez(self.filename, odom=np.array(self.odom_delta), scans=np.array(self.scans))
 
 
 rclpy.init()
-slam_node = SLAMNode()
-atexit.register(slam_node.slam.save)
-rclpy.spin(slam_node)
-slam_node.destroy_node()
+robot_data_collector_node = RobotDataCollectorNode()
+atexit.register(robot_data_collector_node.save)
+rclpy.spin(robot_data_collector_node)
+robot_data_collector_node.destroy_node()
 rclpy.shutdown()
