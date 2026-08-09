@@ -94,7 +94,7 @@ size=self.num_particles, p=probs)
                 idx = t
         return idx
 
-    # Computes range predictions from the initial pose to a query pose
+    # Computes range predictions from a view pose to a query pose
     def pred(self, scan, scan_pose, query_pose):
         ranges = [ [] for _ in range(360)]
         for a in range(360):
@@ -104,13 +104,11 @@ size=self.num_particles, p=probs)
             y = scan_pose[1] + scan[a] * np.sin(a*2*np.pi/360 + scan_pose[2])
             xp = x - query_pose[0]
             yp = y - query_pose[1]
-            na = a*2*np.pi/360 + query_pose[2]
+            na = query_pose[2]
             X = xp * np.cos(na) + yp * np.sin(na)
             Y = -xp * np.sin(na) + yp * np.cos(na)
             R = np.sqrt(X*X + Y*Y)
             THETA = np.arctan2(Y, X)
-            R = np.sqrt(xp*xp + yp*yp)
-            THETA = np.arctan2(yp, xp) - query_pose[2]
             idx = int(THETA*360/(2*np.pi)) % 360
             ranges[idx].append(R)
         for a in range(360):
