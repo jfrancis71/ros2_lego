@@ -96,27 +96,26 @@ size=self.num_particles, p=probs)
 
     # Computes range predictions from a view pose to a query pose
     def pred(self, scan, scan_pose, query_pose):
-        ranges = [ [] for _ in range(360)]
+        ranges = np.zeros([360]) * np.nan
+        linespace = np.arange(360)
+        x = scan_pose[0] + scan * np.cos(linespace*2*np.pi/360 + scan_pose[2])
+        y = scan_pose[1] + scan * np.sin(linespace*2*np.pi/360 + scan_pose[2])
+        xp = x - query_pose[0]
+        yp = y - query_pose[1]
+        na = query_pose[2]
+        X = xp * np.cos(na) + yp * np.sin(na)
+        Y = -xp * np.sin(na) + yp * np.cos(na)
+        R = np.sqrt(X*X + Y*Y)
+        THETA = np.arctan2(Y, X)
         for a in range(360):
-            if np.isnan(scan[a]):
+            if np.isnan(THETA[a]):
                 continue
-            x = scan_pose[0] + scan[a] * np.cos(a*2*np.pi/360 + scan_pose[2])
-            y = scan_pose[1] + scan[a] * np.sin(a*2*np.pi/360 + scan_pose[2])
-            xp = x - query_pose[0]
-            yp = y - query_pose[1]
-            na = query_pose[2]
-            X = xp * np.cos(na) + yp * np.sin(na)
-            Y = -xp * np.sin(na) + yp * np.cos(na)
-            R = np.sqrt(X*X + Y*Y)
-            THETA = np.arctan2(Y, X)
-            idx = int(THETA*360/(2*np.pi)) % 360
-            ranges[idx].append(R)
-        for a in range(360):
-            if ranges[a] == []:
-                ranges[a] = np.nan
+            idx = int(THETA[a]*360/(2*np.pi)) % 360
+            if np.isnan(ranges[idx]):
+                ranges[idx] = R[a]
             else:
-                ranges[a].sort()
-                ranges[a] = ranges[a][0]
+                if R[a] < ranges[idx]:
+                    ranges[idx] = R[a]
         return ranges
 
     def laser_probs(self, predictions, scan):
