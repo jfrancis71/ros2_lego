@@ -15,14 +15,14 @@ class AckermannJoystickNode(Node):
             self.joy_callback,
             1)
         self.twist_publisher = self.create_publisher(TwistStamped, '/cmd_vel', 1)
-        self.declare_parameter('axis_linear', 1)
-        self.axis_linear = self.get_parameter('axis_linear').get_parameter_value().integer_value
-        self.declare_parameter('scale_linear', 1.0)
-        self.scale_linear = self.get_parameter('scale_linear').get_parameter_value().double_value
-        self.declare_parameter('scale_linear_turbo', 1.0)
-        self.scale_linear = self.get_parameter('scale_linear_turbo').get_parameter_value().double_value
-        self.declare_parameter('axis_angular', 1)
-        self.axis_angular = self.get_parameter('axis_angular').get_parameter_value().integer_value
+        self.declare_parameter('axis_linear.x', 1)
+        self.axis_linear = self.get_parameter('axis_linear.x').get_parameter_value().integer_value
+        self.declare_parameter('scale_linear.x', 1.0)
+        self.scale_linear = self.get_parameter('scale_linear.x').get_parameter_value().double_value
+        self.declare_parameter('scale_linear_turbo.x', 1.0)
+        self.scale_linear = self.get_parameter('scale_linear_turbo.x').get_parameter_value().double_value
+        self.declare_parameter('axis_angular.yaw', 1)
+        self.axis_angular = self.get_parameter('axis_angular.yaw').get_parameter_value().integer_value
         self.declare_parameter('min_turn', 1.0)
         self.min_turn = self.get_parameter('min_turn').get_parameter_value().double_value
         self.declare_parameter('enable_button', 8)
