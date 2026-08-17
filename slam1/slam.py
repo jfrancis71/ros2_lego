@@ -24,7 +24,7 @@ class SLAM:
     def rollout(self):
         self.particles = np.tile(np.array([0.0, 0.0, -0.5 * np.pi]), reps=(self.num_particles, self.odom.shape[0], 1))
         for t in range(1, self.odom.shape[0]):
-            self.particles[:, t] = self.extend(self.particles[:, t-1], self.odom[t-1])
+            self.particles[:, t] = self.sample_motion_model_odometry(self.particles[:, t-1], self.odom[t-1])
             predictions = self.laser_pred(t)
             logprobs_particles = self.laser_probs(predictions, self.scans[t])
             probs = np.exp(logprobs_particles)
@@ -32,7 +32,7 @@ class SLAM:
             self.particles[:, t] = self.resample_particles(self.particles[:,t], norm_probs)
 
     def update(self, scan, robot_frame_odom):
-        particles = self.extend(robot_frame_odom)
+        particles = self.sample_motion_model_odometry(robot_frame_odom)
         self.odom_delta.append(robot_frame_odom)
 
     def resample_particles(self, particles, probs):
@@ -41,11 +41,13 @@ size=self.num_particles, p=probs)
         resampled_particles = particles[resampled_particle_indices]
         return resampled_particles
 
-    def extend(self, last_particles, robot_frame_odom):
-        particles = np.zeros([self.num_particles, 3])
-        sp1 = np.random.normal(size=self.num_particles)
-        sp2 = np.random.normal(size=self.num_particles)
-        sp3 = np.random.normal(size=self.num_particles)
+    def sample_motion_model_odometry(self, last_particles, robot_frame_odom):
+        # Loosely based on p136 of Probabilistic Robotics
+        num_particles = last_particles.shape[0]
+        particles = np.zeros([num_particles, 3])
+        sp1 = np.random.normal(size=num_particles)
+        sp2 = np.random.normal(size=num_particles)
+        sp3 = np.random.normal(size=num_particles)
         forward = robot_frame_odom[0]
         sample_forward = forward + .1*sp1*forward
         slide = robot_frame_odom[1]
@@ -58,7 +60,6 @@ size=self.num_particles, p=probs)
 #        particles[:, 0] = last_particles[:, 0] + sp1*.1
 #        particles[:, 1] = last_particles[:, 1] + sp2*.1
 #        particles[:, 2] = last_particles[:, 2] + sp3*.2
-
         return particles
 
     def likelihood(self):
