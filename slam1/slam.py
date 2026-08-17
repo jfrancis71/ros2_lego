@@ -8,6 +8,7 @@ from rclpy.node import Node
 from visualization_msgs.msg import Marker
 from geometry_msgs.msg import Point
 from std_msgs.msg import ColorRGBA
+import slam_utils
 
 
 class SLAM:
@@ -24,7 +25,7 @@ class SLAM:
     def rollout(self):
         self.particles = np.tile(np.array([0.0, 0.0, -0.5 * np.pi]), reps=(self.num_particles, self.odom.shape[0], 1))
         for t in range(1, self.odom.shape[0]):
-            self.particles[:, t] = self.sample_motion_model_odometry(self.particles[:, t-1], self.odom[t-1])
+            self.particles[:, t] = slam_utils.sample_motion_model_odometry(self.particles[:, t-1], self.odom[t-1])
             predictions = self.laser_pred(t)
             logprobs_particles = self.laser_probs(predictions, self.scans[t])
             probs = np.exp(logprobs_particles)
@@ -32,7 +33,7 @@ class SLAM:
             self.particles[:, t] = self.resample_particles(self.particles[:,t], norm_probs)
 
     def update(self, scan, robot_frame_odom):
-        particles = self.sample_motion_model_odometry(robot_frame_odom)
+        particles = slam_utils.sample_motion_model_odometry(robot_frame_odom)
         self.odom_delta.append(robot_frame_odom)
 
     def resample_particles(self, particles, probs):
@@ -40,27 +41,6 @@ class SLAM:
 size=self.num_particles, p=probs)
         resampled_particles = particles[resampled_particle_indices]
         return resampled_particles
-
-    def sample_motion_model_odometry(self, last_particles, robot_frame_odom):
-        # Loosely based on p136 of Probabilistic Robotics
-        num_particles = last_particles.shape[0]
-        particles = np.zeros([num_particles, 3])
-        sp1 = np.random.normal(size=num_particles)
-        sp2 = np.random.normal(size=num_particles)
-        sp3 = np.random.normal(size=num_particles)
-        forward = robot_frame_odom[0]
-        sample_forward = forward + .1*sp1*forward
-        slide = robot_frame_odom[1]
-        sample_slide = slide + .1*sp2*slide
-        spin = robot_frame_odom[2]
-        sample_spin = spin + .1*sp3*spin
-        particles[:, 0] = last_particles[:, 0] + sample_forward * np.cos(last_particles[:, 2]) + sample_slide * np.cos(last_particles[:, 2] + np.pi/2)
-        particles[:, 1] = last_particles[:, 1] + sample_forward * np.sin(last_particles[:, 2]) + sample_slide * np.sin(last_particles[:, 2] + np.pi/2)
-        particles[:, 2] = last_particles[:, 2] + sample_spin
-#        particles[:, 0] = last_particles[:, 0] + sp1*.1
-#        particles[:, 1] = last_particles[:, 1] + sp2*.1
-#        particles[:, 2] = last_particles[:, 2] + sp3*.2
-        return particles
 
     def likelihood(self):
         likelihood = np.zeros([self.num_particles])
@@ -125,6 +105,15 @@ size=self.num_particles, p=probs)
             probs[p] = np.nanmean(norm.logpdf(scan, loc=predictions[p], scale=0.1))
         return probs/1000
 
+    def create_map(self, particle_idx):
+        # Returns indices of mapping poses, assuming particle particle_idx
+        ref_poses = []
+        positions = np.unique(self.particles[particle_idx, :,:2].astype(np.int32), axis=0)
+        for p in range(positions.shape[0]):
+            ref = self.select(particle_idx, positions[p], self.particles.shape[1])
+            ref_poses.append(ref)
+        return ref_poses
+
 
 class SLAMNode(Node):
     def __init__(self):
@@ -133,21 +122,25 @@ class SLAMNode(Node):
         self.path_publisher = self.create_publisher(Marker, '/path_marker', 1)
         self.declare_parameter('filename', 'odom.npz')
         filename = self.get_parameter('filename').get_parameter_value().string_value
+        self.declare_parameter('map_filename', 'map_odom.npz')
+        self.map_filename = self.get_parameter('map_filename').get_parameter_value().string_value
         self.slam = SLAM(filename)
         self.colors = [ [random.random(), random.random(), random.random(), 1.0] for i in range(100)]
 
-    def create_points(self, particle, scan):
+    def create_view(self, pose, scan):
+        # from a scan associated with a pose, produce associated points in ROS2 coords.
         mylist = []
         for b in range(360):
-            x = np.cos(b*2*np.pi/360 + particle[2])*scan[b] + particle[0]
-            y = np.sin(b*2*np.pi/360 + particle[2])*scan[b] + particle[1]
+            x = np.cos(b*2*np.pi/360 + pose[2])*scan[b] + pose[0]
+            y = np.sin(b*2*np.pi/360 + pose[2])*scan[b] + pose[1]
             if np.isnan(scan[b]):
                 pass
             else:
                 mylist.append([x,y])
         return mylist
 
-    def publish_view(self, flat_points, flat_colors):
+    def publish_points(self, flat_points, flat_colors):
+        # List of all points and colors describing an effective map
         marker = Marker()
         marker.header.stamp = self.get_clock().now().to_msg()
         marker.header.frame_id = "map"
@@ -182,18 +175,17 @@ class SLAMNode(Node):
         marker.frame_locked = True
         self.path_publisher.publish(marker)
 
-    def particle_info(self, particle_idx):
-        positions = np.unique(self.slam.particles[particle_idx, :,:2].astype(np.int32), axis=0)
+    def publish_map(self, particle_idx):
         flat_points = []
         flat_colors = []
-        for p in range(positions.shape[0]):
-            ref = self.slam.select(particle_idx, positions[p], self.slam.particles.shape[1])
-            print("Pos=", positions[p], ref)
-            points = self.create_points(self.slam.particles[particle_idx, ref], self.slam.scans[ref])
+        refs = self.slam.create_map(particle_idx)
+        for idx in range(len(refs)):
+            print("Pos=", idx)
+            points = self.create_view(self.slam.particles[particle_idx, refs[idx]], self.slam.scans[refs[idx]])
             for point in points:
                 flat_points.append(point)
-                flat_colors.append(self.colors[p])
-        self.publish_view(flat_points, flat_colors)
+                flat_colors.append(self.colors[idx])
+        self.publish_points(flat_points, flat_colors)
 
     def run(self):
         best_prob = -1000000
@@ -204,13 +196,15 @@ class SLAMNode(Node):
             idx = prob.argmax()
             if est_prob > best_prob:
                 best_prob = est_prob
-                best_particle = self.slam.particles[idx].copy()
-                self.publish_path(best_particle)
-                self.particle_info(idx)
-                print(best_particle, best_prob)
+                self.best_particle = idx
+                self.publish_path(self.slam.particles[self.best_particle])
+                self.publish_map(idx)
+                print(self.best_particle, best_prob)
 
     def exit(self):
         print("Exiting")
+        refs = self.slam.create_map(self.best_particle)
+        np.savez(self.map_filename, poses=np.array(self.slam.particles[self.best_particle, refs]), scans=np.array(self.slam.scans[refs]))
         self.destroy_node()
 
 
