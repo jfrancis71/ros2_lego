@@ -1,21 +1,23 @@
+import random
 import numpy as np
 import rclpy
 from rclpy.node import Node
+from visualization_msgs.msg import Marker
 from rclpy.qos import QoSProfile, DurabilityPolicy, HistoryPolicy
 from sensor_msgs.msg import LaserScan
 from tf2_ros.transform_listener import TransformListener
 from tf2_ros.buffer import Buffer
+import slam_utils
 
 
 class Localizer:
     def __init__(self, filename):
         self.num_particles = 24
-        self.particles = np.tile(np.array([0.0, 0.0, -0.5 * np.pi]), reps=(self.num_p
-articles, self.odom.shape[0]))
+        self.particles = np.tile(np.array([0.0, 0.0, -0.5 * np.pi]), reps=(self.num_particles, 3))
         data = np.load(filename)
         self.poses = data["poses"]
         self.scans = data["scans"]
-        self.particles = np.random.normal(size=[num_particles, 3])
+        self.particles = np.random.normal(size=[self.num_particles, 3])
 
 class LocalizerNode(Node):
     def __init__(self):
@@ -27,7 +29,9 @@ class LocalizerNode(Node):
             "/scan",
             self.lidar_callback,
             1)
-
+        self.view_publisher = self.create_publisher(Marker, '/view_marker', 1)
+        self.view_publisher.publish(Marker())
+        return
         self.tf_buffer = Buffer()
         qos = QoSProfile(
             depth=100,
@@ -41,7 +45,24 @@ qos=qos)
         self.init_wait = 0
         self.declare_parameter('map_filename', 'map_odom.npz')
         map_filename = self.get_parameter('map_filename').get_parameter_value().string_value
-        localizer = Localizer(map_filename)
+        self.localizer = Localizer(map_filename)
+        self.colors = [ [random.random(), random.random(), random.random(), 1.0] for
+i in range(100)]
+        self.publish_map()
+        my = Marker()
+        self.view_publisher.publish(my)
+
+    def publish_map(self):
+        flat_points = []
+        flat_colors = []
+        for idx in range(len(self.localizer.poses)):
+            print("Pos=", idx)
+            points = slam_utils.create_view(self.localizer.poses[idx], self.localizer.scans[idx])
+            for point in points:
+                flat_points.append(point)
+                flat_colors.append(self.colors[idx])
+        self.view_publisher.publish(slam_utils.publish_points(self.view_publisher, self.get_clock().now().to_msg(), flat_points, flat_colors))
+
 
     def publish_map_odom_transform(self, tf_base_laser_to_odom, pose):
         tf_zero_to_odom = TransformStamped()
@@ -123,6 +144,7 @@ qos=qos)
 
 rclpy.init()
 localizer_node = LocalizerNode()
+#localizer_node.publish_map()
 rclpy.spin(localizer_node)
 localizer_node.destroy_node()
 rclpy.shutdown()

@@ -1,4 +1,40 @@
 import numpy as np
+from visualization_msgs.msg import Marker
+from geometry_msgs.msg import Point
+from std_msgs.msg import ColorRGBA
+
+
+def create_view(pose, scan):
+    # from a scan associated with a pose, produce associated points in ROS2 coords.
+    mylist = []
+    for b in range(360):
+        x = np.cos(b*2*np.pi/360 + pose[2])*scan[b] + pose[0]
+        y = np.sin(b*2*np.pi/360 + pose[2])*scan[b] + pose[1]
+        if np.isnan(scan[b]):
+            pass
+        else:
+            mylist.append([x,y])
+    return mylist
+
+
+def publish_points(publisher, t, flat_points, flat_colors):
+    # List of all points and colors describing an effective map
+    marker = Marker()
+    marker.header.stamp = t
+    marker.header.frame_id = "map"
+    marker.ns = "0"
+    marker.id = 0
+    marker.type = Marker.POINTS
+    marker.action = Marker.ADD
+    marker.pose.position.x, marker.pose.position.y, marker.pose.position.z = 0.0, 0.0, 0.0
+    marker.pose.orientation.x, marker.pose.orientation.y, marker.pose.orientation.z = 0.0, 0.0, 0.0
+    marker.pose.orientation.w = 1.0
+    marker.scale.x, marker.scale.y, marker.scale.z = 0.03, 0.03, 0.05
+    marker.points = [Point(x=x,y=y) for (x,y) in flat_points]
+    marker.colors = [ColorRGBA(r=r, g=g, b=b, a=a) for (r,g,b,a) in flat_colors]
+    marker.frame_locked = True
+    print("PUBLISIHNG", marker.points[:10])
+    return marker
 
 
 def sample_motion_model_odometry(last_particles, robot_frame_odom):
