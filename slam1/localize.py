@@ -2,10 +2,12 @@ import random
 import numpy as np
 import rclpy
 from rclpy.node import Node
+from rclpy.time import Time
 from visualization_msgs.msg import Marker
 from rclpy.qos import QoSProfile, DurabilityPolicy, HistoryPolicy
 from sensor_msgs.msg import LaserScan
 from tf2_ros.transform_listener import TransformListener
+from tf_transformations import euler_from_quaternion
 from tf2_ros.buffer import Buffer
 import slam_utils
 
@@ -31,7 +33,6 @@ class LocalizerNode(Node):
             1)
         self.view_publisher = self.create_publisher(Marker, '/view_marker', 1)
         self.view_publisher.publish(Marker())
-        return
         self.tf_buffer = Buffer()
         qos = QoSProfile(
             depth=100,
@@ -49,8 +50,6 @@ qos=qos)
         self.colors = [ [random.random(), random.random(), random.random(), 1.0] for
 i in range(100)]
         self.publish_map()
-        my = Marker()
-        self.view_publisher.publish(my)
 
     def publish_map(self):
         flat_points = []
@@ -86,7 +85,7 @@ i in range(100)]
         diff_y = current_odom_pose[1] - previous_odom_pose[1]
         forward = diff_x * np.cos(previous_odom_pose[2]) + diff_y * np.sin(previous_odom_pose[2])
         slip = diff_x * np.cos(previous_odom_pose[2] + np.pi/2) + diff_y * np.sin(previous_odom_pose[2] + np.pi/2)
-        diff_angle = angle_diff(current_odom_pose[2], previous_odom_pose[2])
+        diff_angle = slam_utils.angle_diff(current_odom_pose[2], previous_odom_pose[2])
         d_rot = current_odom_pose[2] - previous_odom_pose[2]
         print("forward=", forward, " slip=", slip, d_rot)
         return forward, slip, d_rot
@@ -102,10 +101,11 @@ i in range(100)]
         diff_x = current_odom_pose[0] - self.previous_odom_pose[0]
         diff_y = current_odom_pose[1] - self.previous_odom_pose[1]
         d_trans = np.sqrt(diff_y**2 + diff_x**2)
-        diff_angle = angle_diff(current_odom_pose[2], self.previous_odom_pose[2])
+        diff_angle = slam_utils.angle_diff(current_odom_pose[2], self.previous_odom_pose[2])
         return np.abs(diff_angle) > self.min_angle or d_trans > self.min_dist
 
     def lidar_callback(self, lidar_msg):
+        self.publish_map()
         if self.init_wait < 10:
             self.init_wait += 1
             return

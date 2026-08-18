@@ -4,6 +4,17 @@ from geometry_msgs.msg import Point
 from std_msgs.msg import ColorRGBA
 
 
+def angle_diff(angle_1, angle_2):
+    """Returns closest difference between two angles.
+
+       Note you cannot just subtract the angles, eg 3.1 - (-3.1) = 6.2. This not the
+closest angle change.
+
+    """
+    abs_diff_angle = np.abs(angle_1 - angle_2)
+    return np.min(np.array([abs_diff_angle, 2*np.pi - abs_diff_angle]))
+
+
 def create_view(pose, scan):
     # from a scan associated with a pose, produce associated points in ROS2 coords.
     mylist = []
@@ -33,7 +44,6 @@ def publish_points(publisher, t, flat_points, flat_colors):
     marker.points = [Point(x=x,y=y) for (x,y) in flat_points]
     marker.colors = [ColorRGBA(r=r, g=g, b=b, a=a) for (r,g,b,a) in flat_colors]
     marker.frame_locked = True
-    print("PUBLISIHNG", marker.points[:10])
     return marker
 
 
