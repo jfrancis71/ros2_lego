@@ -2,7 +2,6 @@ import copy
 import atexit
 import random
 import numpy as np
-from scipy.stats import norm
 import rclpy
 from rclpy.node import Node
 from visualization_msgs.msg import Marker
@@ -27,7 +26,7 @@ class SLAM:
         for t in range(1, self.odom.shape[0]):
             self.particles[:, t] = slam_utils.sample_motion_model_odometry(self.particles[:, t-1], self.odom[t-1])
             predictions = self.laser_pred(t)
-            logprobs_particles = self.laser_probs(predictions, self.scans[t])
+            logprobs_particles = slam_utils.laser_probs(predictions, self.scans[t])
             probs = np.exp(logprobs_particles)
             norm_probs = probs/probs.sum()
             self.particles[:, t] = self.resample_particles(self.particles[:,t], norm_probs)
@@ -46,7 +45,7 @@ size=self.num_particles, p=probs)
         likelihood = np.zeros([self.num_particles])
         for t in range(1, self.odom.shape[1]):
             predictions = self.laser_pred(t)
-            logprobs_particles = self.laser_probs(predictions, self.scans[t])
+            logprobs_particles = slam_utils.laser_probs(predictions, self.scans[t])
             likelihood += logprobs_particles
         return likelihood
 
@@ -54,7 +53,7 @@ size=self.num_particles, p=probs)
         predictions = np.zeros([self.num_particles, 360])
         for p in range(self.num_particles):
             rel_node = self.select(p, self.particles[p, t], t)
-            predictions[p] = self.pred(self.scans[rel_node], self.particles[p, rel_node], self.particles[p, t])
+            predictions[p] = slam_utils.pred(self.scans[rel_node], self.particles[p, rel_node], self.particles[p, t])
         return predictions
 
     def interior(self, scan, scan_pose, query_pose):
@@ -74,36 +73,6 @@ size=self.num_particles, p=probs)
                 min_dist = dist
                 idx = t
         return idx
-
-    # Computes range predictions from a view pose to a query pose
-    def pred(self, scan, scan_pose, query_pose):
-        ranges = np.zeros([360]) * np.nan
-        linespace = np.arange(360)
-        x = scan_pose[0] + scan * np.cos(linespace*2*np.pi/360 + scan_pose[2])
-        y = scan_pose[1] + scan * np.sin(linespace*2*np.pi/360 + scan_pose[2])
-        xp = x - query_pose[0]
-        yp = y - query_pose[1]
-        na = query_pose[2]
-        X = xp * np.cos(na) + yp * np.sin(na)
-        Y = -xp * np.sin(na) + yp * np.cos(na)
-        R = np.sqrt(X*X + Y*Y)
-        THETA = np.arctan2(Y, X)
-        for a in range(360):
-            if np.isnan(THETA[a]):
-                continue
-            idx = int(THETA[a]*360/(2*np.pi)) % 360
-            if np.isnan(ranges[idx]):
-                ranges[idx] = R[a]
-            else:
-                if R[a] < ranges[idx]:
-                    ranges[idx] = R[a]
-        return ranges
-
-    def laser_probs(self, predictions, scan):
-        probs = np.zeros([self.num_particles])
-        for p in range(self.num_particles):
-            probs[p] = np.nanmean(norm.logpdf(scan, loc=predictions[p], scale=0.1))
-        return probs/1000
 
     def create_map(self, particle_idx):
         # Returns indices of mapping poses, assuming particle particle_idx

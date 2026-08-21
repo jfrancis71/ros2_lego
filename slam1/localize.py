@@ -1,25 +1,71 @@
 import random
+import skimage
 import numpy as np
+from scipy.stats import vonmises
+from scipy.spatial.transform import Rotation as R
 import rclpy
 from rclpy.node import Node
 from rclpy.time import Time
 from visualization_msgs.msg import Marker
+from geometry_msgs.msg import Point, TransformStamped, PoseWithCovarianceStamped
 from rclpy.qos import QoSProfile, DurabilityPolicy, HistoryPolicy
 from sensor_msgs.msg import LaserScan
 from tf2_ros.transform_listener import TransformListener
 from tf_transformations import euler_from_quaternion
 from tf2_ros.buffer import Buffer
+# Current StaticTransformBroadcaster is broken, we need to use from rolling.
+# clone git clone https://github.com/ros2/geometry2.git
+# Prepend ./src/geometry2/tf2_ros_py/tf2_ros to PYTHONPATH and export
+from static_transform_broadcaster import StaticTransformBroadcaster
+from tf2_ros import TransformException
+from tf_transformations import euler_from_quaternion, quaternion_from_euler
 import slam_utils
 
 
 class Localizer:
     def __init__(self, filename):
-        self.num_particles = 24
+        self.num_particles = 1000
         self.particles = np.tile(np.array([0.0, 0.0, -0.5 * np.pi]), reps=(self.num_particles, 3))
         data = np.load(filename)
         self.poses = data["poses"]
         self.scans = data["scans"]
         self.particles = np.random.normal(size=[self.num_particles, 3])
+
+    def update_scan(self, scan):
+        self.particles += np.random.normal(size=[self.num_particles, 3])*.1
+        predictions = self.laser_pred()
+        logprobs_particles = slam_utils.laser_probs(predictions, scan)*100
+        probs = np.exp(logprobs_particles)
+        norm_probs = probs/probs.sum()
+        self.particles = self.resample_particles(self.particles, norm_probs)
+
+    def laser_pred(self):
+        predictions = np.zeros([self.num_particles, 360])
+        for p in range(self.num_particles):
+            rel_node = self.select(p, self.particles[p])
+            predictions[p] = slam_utils.pred(self.scans[rel_node], self.poses[rel_node], self.particles[p])
+        return predictions
+
+    def select(self, particle_idx, particle):  # We discretise pose to 1m and ask for pose closest to this
+        min_dist = 10000
+        for t in range(len(self.poses)):
+            dist = np.sqrt( (self.poses[t, 0]-int(particle[0]))**2 + (self.poses[t, 1] - int(particle[1]))**2)
+            if dist < min_dist:
+                min_dist = dist
+                idx = t
+        return idx
+
+    def resample_particles(self, particles, probs):
+        resampled_particle_indices = np.random.choice(np.arange(self.num_particles),
+size=self.num_particles, p=probs)
+        resampled_particles = particles[resampled_particle_indices]
+        return resampled_particles
+
+    def expected_pose(self):
+        x_mean, y_mean, _ = np.mean(self.particles, axis=0)
+        _, angle, _ = vonmises.fit(self.particles[:, 2], fscale=1)
+        return x_mean, y_mean, angle
+
 
 class LocalizerNode(Node):
     def __init__(self):
@@ -32,6 +78,7 @@ class LocalizerNode(Node):
             self.lidar_callback,
             1)
         self.view_publisher = self.create_publisher(Marker, '/view_marker', 1)
+        self.particles_publisher = self.create_publisher(Marker, '/particles', 1)
         self.view_publisher.publish(Marker())
         self.tf_buffer = Buffer()
         qos = QoSProfile(
@@ -49,7 +96,26 @@ qos=qos)
         self.localizer = Localizer(map_filename)
         self.colors = [ [random.random(), random.random(), random.random(), 1.0] for
 i in range(100)]
+        self.tf_static_broadcaster = StaticTransformBroadcaster(self)
         self.publish_map()
+
+    def publish_particles(self, pose):
+        marker = Marker()
+        marker.header.stamp = self.current_lidar_msg.header.stamp
+        marker.header.frame_id = "base_laser"
+        marker.ns = "basic_shapes"
+        marker.id = 0
+        marker.type = Marker.POINTS
+        marker.action = Marker.ADD
+        marker.pose.position.x, marker.pose.position.y, marker.pose.position.z = 0.0, 0.0, 0.0
+        marker.pose.orientation.x, marker.pose.orientation.y, marker.pose.orientation.z = 0.0, 0.0, 0.0
+        marker.pose.orientation.w = 1.0
+        marker.scale.x, marker.scale.y, marker.scale.z = 0.03, 0.03, 0.05
+        marker.color.r, marker.color.g, marker.color.b, marker.color.a = 0.3, 1.0, 1.0, .2
+        particles_base_laser = np.matmul(self.localizer.particles[:, :2] - pose[:2], R.from_rotvec([0, 0, -pose[2]]).as_matrix()[:2, :2])
+        marker.points = [Point(x=x,y=y) for (x, y) in particles_base_laser.tolist()]
+        marker.frame_locked = True
+        self.particles_publisher.publish(marker)
 
     def publish_map(self):
         flat_points = []
@@ -106,12 +172,14 @@ i in range(100)]
 
     def lidar_callback(self, lidar_msg):
         self.publish_map()
+        print("R")
         if self.init_wait < 10:
             self.init_wait += 1
             return
         if self.current_lidar_msg is None:
             self.current_lidar_msg = lidar_msg
             return
+        print("T")
         lidar_msg_time = Time.from_msg(self.current_lidar_msg.header.stamp)
         try:
             tf_base_laser_to_odom = self.tf_buffer.lookup_transform(
@@ -124,20 +192,25 @@ i in range(100)]
                 lidar_msg_time)
         except TransformException as ex:  # This is common and normal.
             return
+        print("HE")
         self.process_lidar(self.current_lidar_msg, tf_base_laser_to_odom, tf_odom_to_base_laser)
         self.current_lidar_msg = None
 
     def process_lidar(self, lidar_msg, tf_base_laser_to_odom, tf_odom_to_base_laser):
-        scan = np.array(lidar_msg.ranges).astype(np.float32)
+        scan = skimage.transform.resize(np.array(lidar_msg.ranges).astype(np.float32), (360,))
+        self.localizer.update_scan(scan)
         current_odom_pose = self.ros2_to_pose(tf_odom_to_base_laser)
         if self.init_wait == 10:
             self.init_wait += 1
             return
         if self.previous_odom_pose is None:
             self.previous_odom_pose = current_odom_pose
-        if self.robot_moved(current_odom_pose):
+        if self.robot_moved(current_odom_pose) or 1==1:
+            print("ORO")
             robot_frame_odom = self.robot_frame_odom(self.previous_odom_pose, current_odom_pose)
             pose = self.localizer.expected_pose()
+            print("pose=", pose)
+            self.publish_particles(pose)
             self.publish_map_odom_transform(tf_base_laser_to_odom, pose)
             self.previous_odom_pose = current_odom_pose
 

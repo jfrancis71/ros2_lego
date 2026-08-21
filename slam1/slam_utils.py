@@ -1,4 +1,5 @@
 import numpy as np
+from scipy.stats import norm
 from visualization_msgs.msg import Marker
 from geometry_msgs.msg import Point
 from std_msgs.msg import ColorRGBA
@@ -67,3 +68,37 @@ def sample_motion_model_odometry(last_particles, robot_frame_odom):
 #        particles[:, 1] = last_particles[:, 1] + sp2*.1
 #        particles[:, 2] = last_particles[:, 2] + sp3*.2
     return particles
+
+
+# Computes range predictions from a view pose to a query pose
+def pred(scan, scan_pose, query_pose):
+    ranges = np.zeros([360]) * np.nan
+    linespace = np.arange(360)
+    x = scan_pose[0] + scan * np.cos(linespace*2*np.pi/360 + scan_pose[2])
+    y = scan_pose[1] + scan * np.sin(linespace*2*np.pi/360 + scan_pose[2])
+    xp = x - query_pose[0]
+    yp = y - query_pose[1]
+    na = query_pose[2]
+    X = xp * np.cos(na) + yp * np.sin(na)
+    Y = -xp * np.sin(na) + yp * np.cos(na)
+    R = np.sqrt(X*X + Y*Y)
+    THETA = np.arctan2(Y, X)
+    for a in range(360):
+        if np.isnan(THETA[a]):
+            continue
+        idx = int(THETA[a]*360/(2*np.pi)) % 360
+        if np.isnan(ranges[idx]):
+            ranges[idx] = R[a]
+        else:
+            if R[a] < ranges[idx]:
+                ranges[idx] = R[a]
+    return ranges
+
+
+def laser_probs(predictions, scan):
+    num_particles = predictions.shape[0]     
+    probs = np.zeros([num_particles])
+    for p in range(num_particles):
+        probs[p] = np.nanmean(norm.logpdf(scan, loc=predictions[p], scale=0.1))
+    return probs/1000
+
