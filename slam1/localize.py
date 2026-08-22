@@ -24,12 +24,13 @@ import slam_utils
 
 class Localizer:
     def __init__(self, filename):
-        self.num_particles = 1000
-        self.particles = np.tile(np.array([0.0, 0.0, -0.5 * np.pi]), reps=(self.num_particles, 3))
+        self.num_particles = 2000
+#        self.particles = np.tile(np.array([3.0, 2.0, -0.5 * np.pi]), reps=(self.num_particles, 1))
         data = np.load(filename)
         self.poses = data["poses"]
         self.scans = data["scans"]
         self.particles = np.random.normal(size=[self.num_particles, 3])
+#        print("DIAG", self.particles.shape, self.particles1.shape)
 
     def update_scan(self, scan):
         self.particles += np.random.normal(size=[self.num_particles, 3])*.1
@@ -37,7 +38,9 @@ class Localizer:
         logprobs_particles = slam_utils.laser_probs(predictions, scan)*100
         probs = np.exp(logprobs_particles)
         norm_probs = probs/probs.sum()
-        self.particles = self.resample_particles(self.particles, norm_probs)
+        fract = int(self.num_particles*.9)
+        self.particles[:fract] = self.resample_particles(self.particles, norm_probs)[:fract]
+        self.particles[fract:] = np.random.normal(size=[self.num_particles-fract, 3])*2.0
 
     def laser_pred(self):
         predictions = np.zeros([self.num_particles, 360])
