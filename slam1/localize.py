@@ -25,7 +25,7 @@ import slam_utils
 class Localizer:
     def __init__(self, filename):
         self.num_particles = 2000
-#        self.particles = np.tile(np.array([3.0, 2.0, -0.5 * np.pi]), reps=(self.num_particles, 1))
+        self.particles = np.tile(np.array([1.5, 0.0, 0.0 * np.pi]), reps=(self.num_particles, 1))
         data = np.load(filename)
         self.poses = data["poses"]
         self.scans = data["scans"]
@@ -36,11 +36,20 @@ class Localizer:
         self.particles += np.random.normal(size=[self.num_particles, 3])*.1
         predictions = self.laser_pred()
         logprobs_particles = slam_utils.laser_probs(predictions, scan)*100
+        self.remove_exterior(logprobs_particles, scan)
         probs = np.exp(logprobs_particles)
         norm_probs = probs/probs.sum()
         fract = int(self.num_particles*.9)
         self.particles[:fract] = self.resample_particles(self.particles, norm_probs)[:fract]
         self.particles[fract:] = np.random.normal(size=[self.num_particles-fract, 3])*2.0
+
+    def remove_exterior(self, logprobs_particles, scan):
+        for p in range(self.num_particles):
+            idx = self.select(3, self.particles[p])
+            print("idx=", idx)
+            if not self.interior(scan, self.poses[idx], self.particles[p]):
+                print("Remobe")
+                logprobs_particles[p] = -10000
 
     def laser_pred(self):
         predictions = np.zeros([self.num_particles, 360])
@@ -57,6 +66,19 @@ class Localizer:
                 min_dist = dist
                 idx = t
         return idx
+
+    def interior(self, scan, scan_pose, query_pose):
+        xp = query_pose[0] - scan_pose[0]
+        yp = query_pose[1] - scan_pose[1]
+        angle = np.arctan2(yp, xp)
+        R = np.sqrt(xp*xp + yp*yp)
+        rolled_scan = np.roll(scan, int((-scan_pose[2]+np.pi/2)*360/(2*np.pi)))
+#        print("scan_pose=", scan_pose, " query_pose=", query_pose)
+#        print("R=", R, "angle=", angle, " rolled=", rolled_scan[int(angle)], " scan=", scan)
+        if rolled_scan[int(angle)] > R:
+            return True
+        else:
+            return False
 
     def resample_particles(self, particles, probs):
         resampled_particle_indices = np.random.choice(np.arange(self.num_particles),
