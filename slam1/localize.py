@@ -31,6 +31,7 @@ class Localizer:
         self.scans = data["scans"]
         self.particles = np.random.normal(size=[self.num_particles, 3])
 #        print("DIAG", self.particles.shape, self.particles1.shape)
+        self.particles = self.generate_interior_particles(self.num_particles)
 
     def update_scan(self, scan):
         self.particles += np.random.normal(size=[self.num_particles, 3])*.1
@@ -41,7 +42,22 @@ class Localizer:
         norm_probs = probs/probs.sum()
         fract = int(self.num_particles*.9)
         self.particles[:fract] = self.resample_particles(self.particles, norm_probs)[:fract]
-        self.particles[fract:] = np.random.normal(size=[self.num_particles-fract, 3])*2.0
+        self.particles[fract:] = self.generate_interior_particles(self.num_particles-fract)
+
+    def generate_interior_particles(self, num_particles):
+        particles = []
+        print("Start=", self.poses[0], self.scans[0][0])
+        while len(particles) < num_particles:
+            view = np.random.randint(0, len(self.poses))
+            angle = np.random.randint(0, 360)
+            if np.isnan(self.scans[view][angle]):
+                continue
+            sample_range = np.random.uniform(low=0, high=self.scans[view][angle])
+            xp = sample_range * np.cos(self.poses[view][2] + np.pi * 2*angle/360) + self.poses[view][0]
+            yp = sample_range * np.sin(self.poses[view][2] + np.pi * 2*angle/360) + self.poses[view][1]
+            sample_orientation = np.random.uniform(0, 360)
+            particles.append(np.array([xp, yp, sample_orientation]))
+        return np.array(particles)
 
     def remove_exterior(self, logprobs_particles, scan):
         for p in range(self.num_particles):
@@ -137,7 +153,7 @@ i in range(100)]
         marker.pose.orientation.w = 1.0
         marker.scale.x, marker.scale.y, marker.scale.z = 0.03, 0.03, 0.05
         marker.color.r, marker.color.g, marker.color.b, marker.color.a = 0.3, 1.0, 1.0, .2
-        particles_base_laser = np.matmul(self.localizer.particles[:, :2] - pose[:2], R.from_rotvec([0, 0, -pose[2]]).as_matrix()[:2, :2])
+        particles_base_laser = np.matmul(self.localizer.particles[:, :2] - pose[:2], R.from_rotvec([0, 0, pose[2]]).as_matrix()[:2, :2])
         marker.points = [Point(x=x,y=y) for (x, y) in particles_base_laser.tolist()]
         marker.frame_locked = True
         self.particles_publisher.publish(marker)
