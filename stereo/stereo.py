@@ -14,9 +14,9 @@ class StereoNode(Node):
         super().__init__("mystereo_node")
         self.points_subscription = self.create_subscription(
             PointCloud2,
-            "/ffs_points2",
+            "/points2",
 #            "points2",
-            self.points_callback,
+            self.ros2_points_callback,
             1)
         self.view_publisher = self.create_publisher(Marker, '/my_stereo_marker', 1)
 
@@ -43,7 +43,7 @@ class StereoNode(Node):
         marker.frame_locked = True
         self.view_publisher.publish(marker)
 
-    def points_callback(self, points_msg):
+    def ffs_points_callback(self, points_msg):
         num_points = points_msg.width
         itemsize = np.dtype(np.float32).itemsize
         point_element_size = 3*itemsize + 3
@@ -53,11 +53,6 @@ class StereoNode(Node):
             buffer=points_msg.data)
         my_raw = np.array(raw[:, :12])
         print("RAW=", points_msg.data[:12])
-#        raw = np.ndarray(
-#            shape=(15, points_msg.width * points_msg.height),
-#            dtype=np.byte,
-#            buffer=points_msg.data)
-#        my_raw = np.array(raw[:12, :], order='F')
         print("size=", my_raw.nbytes)
         pt = np.ndarray(
                 shape=(num_points, 3),
@@ -67,6 +62,26 @@ class StereoNode(Node):
         print("Callback", pt[:5])
         self.publish_points(pt, points_msg.header.stamp)
 
+
+    def ros2_points_callback(self, points_msg):
+        num_points = points_msg.width*points_msg.height
+        itemsize = np.dtype(np.float32).itemsize
+        point_element_size = 3*itemsize + 3
+        raw = np.ndarray(
+            shape=(points_msg.width * points_msg.height, points_msg.point_step),
+            dtype=np.byte,
+            buffer=points_msg.data)
+        my_raw = np.array(raw[:, :12])
+        print("size=", my_raw.nbytes)
+        pt = np.ndarray(
+                shape=(num_points, 3),
+#                shape=(240*320, 3),
+                dtype=np.float32,
+                buffer=my_raw)
+        print("Leg=", len(points_msg.data))
+        print("Callback", pt[:5])
+        print("pt=", pt)
+        self.publish_points(pt, points_msg.header.stamp)
 
 rclpy.init()
 stereo_node = StereoNode()
