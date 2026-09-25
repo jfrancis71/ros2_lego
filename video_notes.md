@@ -30,9 +30,9 @@ USB Bandwidth: 140KB (equiv 1.1Mb)
 
 ### USBCAM:
 
-69% CPU.
+25% CPU.
 
-Network Bandwidth: 9.25Mb
+Network Bandwidth: 3.0Mb
 
 USB Bandwidth: 140KB (equiv 1.1Mb)
 
@@ -40,3 +40,4 @@ Roundtrip latent: .88
 
 
 Observations: Anecdotally, just looking it looks to me like USBCAM has much lower latency than cam2image. Reason for discrepancy?
+The USB numbers look questionable, there is some suggestion on GitHub questioning reliability.
