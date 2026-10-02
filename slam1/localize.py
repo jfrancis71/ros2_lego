@@ -25,28 +25,27 @@ import slam_utils
 class Localizer:
     def __init__(self, filename):
         self.num_particles = 2000
-        self.particles = np.tile(np.array([1.5, 0.0, 0.0 * np.pi]), reps=(self.num_particles, 1))
         data = np.load(filename)
         self.poses = data["poses"]
         self.scans = data["scans"]
-        self.particles = np.random.normal(size=[self.num_particles, 3])
-#        print("DIAG", self.particles.shape, self.particles1.shape)
         self.particles = self.generate_interior_particles(self.num_particles)
 
     def update_scan(self, scan):
-        self.particles += np.random.normal(size=[self.num_particles, 3])*.1
-        predictions = self.laser_pred()
+        self.particles += np.random.normal(size=[self.num_particles, 3])*.1  # Should really be part of odometry
+        kidnap_particles_num = int(self.num_particles*.1)
+        particles = np.zeros([self.num_particles + kidnap_particles_num, 3])
+        particles[:self.num_particles] = self.particles
+        particles[self.num_particles:] = self.generate_interior_particles(kidnap_particles_num)
+        predictions = self.laser_pred(particles)
         logprobs_particles = slam_utils.laser_probs(predictions, scan)*100
+        # We remove exterior as our random odometry may have put us outside
         self.remove_exterior(logprobs_particles, scan)
         probs = np.exp(logprobs_particles)
         norm_probs = probs/probs.sum()
-        fract = int(self.num_particles*.9)
-        self.particles[:fract] = self.resample_particles(self.particles, norm_probs)[:fract]
-        self.particles[fract:] = self.generate_interior_particles(self.num_particles-fract)
+        self.particles = self.resample_particles(particles, norm_probs, self.num_particles)
 
     def generate_interior_particles(self, num_particles):
         particles = []
-        print("Start=", self.poses[0], self.scans[0][0])
         while len(particles) < num_particles:
             view = np.random.randint(0, len(self.poses))
             angle = np.random.randint(0, 360)
@@ -61,20 +60,19 @@ class Localizer:
 
     def remove_exterior(self, logprobs_particles, scan):
         for p in range(self.num_particles):
-            idx = self.select(3, self.particles[p])
-            print("idx=", idx)
+            idx = self.find_pose(self.particles[p])
             if not self.interior(scan, self.poses[idx], self.particles[p]):
-                print("Remobe")
                 logprobs_particles[p] = -10000
 
-    def laser_pred(self):
-        predictions = np.zeros([self.num_particles, 360])
-        for p in range(self.num_particles):
-            rel_node = self.select(p, self.particles[p])
-            predictions[p] = slam_utils.pred(self.scans[rel_node], self.poses[rel_node], self.particles[p])
+    def laser_pred(self, particles):
+        num_particles = particles.shape[0]
+        predictions = np.zeros([num_particles, 360])
+        for p in range(num_particles):
+            rel_node = self.find_pose(particles[p])
+            predictions[p] = slam_utils.pred(self.scans[rel_node], self.poses[rel_node], particles[p])
         return predictions
 
-    def select(self, particle_idx, particle):  # We discretise pose to 1m and ask for pose closest to this
+    def find_pose(self, particle):  # We discretise pose to 1m and ask for pose closest to this
         min_dist = 10000
         for t in range(len(self.poses)):
             dist = np.sqrt( (self.poses[t, 0]-int(particle[0]))**2 + (self.poses[t, 1] - int(particle[1]))**2)
@@ -89,16 +87,15 @@ class Localizer:
         angle = np.arctan2(yp, xp)
         R = np.sqrt(xp*xp + yp*yp)
         rolled_scan = np.roll(scan, int((-scan_pose[2]+np.pi/2)*360/(2*np.pi)))
-#        print("scan_pose=", scan_pose, " query_pose=", query_pose)
-#        print("R=", R, "angle=", angle, " rolled=", rolled_scan[int(angle)], " scan=", scan)
         if rolled_scan[int(angle)] > R:
             return True
         else:
             return False
 
-    def resample_particles(self, particles, probs):
-        resampled_particle_indices = np.random.choice(np.arange(self.num_particles),
-size=self.num_particles, p=probs)
+    def resample_particles(self, particles, probs, num_resampled_particles):
+        num_particles = particles.shape[0]
+        resampled_particle_indices = np.random.choice(np.arange(num_particles),
+            size=num_resampled_particles, p=probs)
         resampled_particles = particles[resampled_particle_indices]
         return resampled_particles
 
