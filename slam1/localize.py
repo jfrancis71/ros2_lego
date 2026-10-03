@@ -41,6 +41,7 @@ class Localizer:
         # We remove exterior as our random odometry may have put us outside
         self.remove_exterior(logprobs_particles, scan)
         probs = np.exp(logprobs_particles)
+        print("MAX PROB=", probs.max())
         norm_probs = probs/probs.sum()
         self.particles = self.resample_particles(particles, norm_probs, self.num_particles)
 
