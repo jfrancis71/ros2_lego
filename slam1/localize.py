@@ -26,17 +26,17 @@ class Localizer:
     def __init__(self, filename):
         self.num_particles = 2000
         data = np.load(filename)
-        self.poses = data["poses"]
-        self.scans = data["scans"]
+        self.views_poses = data["poses"]
+        self.views_scans = data["scans"]
         self.particles = self.generate_interior_particles(self.num_particles)
 
-    def update_scan(self, scan):
+    def update_from_lidar(self, scan):
         self.particles += np.random.normal(size=[self.num_particles, 3])*.1  # Should really be part of odometry
         kidnap_particles_num = int(self.num_particles*.1)
         particles = np.zeros([self.num_particles + kidnap_particles_num, 3])
         particles[:self.num_particles] = self.particles
         particles[self.num_particles:] = self.generate_interior_particles(kidnap_particles_num)
-        predictions = self.laser_pred(particles)
+        predictions = self.lidar_range_predictions(particles)
         logprobs_particles = slam_utils.laser_probs(predictions, scan)*100
         # We remove exterior as our random odometry may have put us outside
         self.remove_exterior(logprobs_particles, scan)
@@ -47,41 +47,41 @@ class Localizer:
     def generate_interior_particles(self, num_particles):
         particles = []
         while len(particles) < num_particles:
-            view = np.random.randint(0, len(self.poses))
+            view = np.random.randint(0, len(self.views_poses))
             angle = np.random.randint(0, 360)
-            if np.isnan(self.scans[view][angle]):
+            if np.isnan(self.views_scans[view][angle]):
                 continue
-            sample_range = np.random.uniform(low=0, high=self.scans[view][angle])
-            xp = sample_range * np.cos(self.poses[view][2] + np.pi * 2*angle/360) + self.poses[view][0]
-            yp = sample_range * np.sin(self.poses[view][2] + np.pi * 2*angle/360) + self.poses[view][1]
+            sample_range = np.random.uniform(low=0, high=self.views_scans[view][angle])
+            xp = sample_range * np.cos(self.views_poses[view][2] + np.pi * 2*angle/360) + self.views_poses[view][0]
+            yp = sample_range * np.sin(self.views_poses[view][2] + np.pi * 2*angle/360) + self.views_poses[view][1]
             sample_orientation = np.random.uniform(0, 360)
             particles.append(np.array([xp, yp, sample_orientation]))
         return np.array(particles)
 
     def remove_exterior(self, logprobs_particles, scan):
         for p in range(self.num_particles):
-            idx = self.find_pose(self.particles[p])
-            if not self.interior(scan, self.poses[idx], self.particles[p]):
+            idx = self.find_closest_view(self.particles[p])
+            if not self.is_interior(scan, self.views_poses[idx], self.particles[p]):
                 logprobs_particles[p] = -10000
 
-    def laser_pred(self, particles):
+    def lidar_range_predictions(self, particles):
         num_particles = particles.shape[0]
         predictions = np.zeros([num_particles, 360])
         for p in range(num_particles):
-            rel_node = self.find_pose(particles[p])
-            predictions[p] = slam_utils.pred(self.scans[rel_node], self.poses[rel_node], particles[p])
+            rel_node = self.find_closest_view(particles[p])
+            predictions[p] = slam_utils.pred(self.views_scans[rel_node], self.views_poses[rel_node], particles[p])
         return predictions
 
-    def find_pose(self, particle):  # We discretise pose to 1m and ask for pose closest to this
+    def find_closest_view(self, particle):  # We discretise pose to 1m and ask for pose closest to this
         min_dist = 10000
-        for t in range(len(self.poses)):
-            dist = np.sqrt( (self.poses[t, 0]-int(particle[0]))**2 + (self.poses[t, 1] - int(particle[1]))**2)
+        for t in range(len(self.views_poses)):
+            dist = np.sqrt( (self.views_poses[t, 0]-int(particle[0]))**2 + (self.views_poses[t, 1] - int(particle[1]))**2)
             if dist < min_dist:
                 min_dist = dist
                 idx = t
         return idx
 
-    def interior(self, scan, scan_pose, query_pose):
+    def is_interior(self, scan, scan_pose, query_pose):
         xp = query_pose[0] - scan_pose[0]
         yp = query_pose[1] - scan_pose[1]
         angle = np.arctan2(yp, xp)
@@ -158,9 +158,9 @@ i in range(100)]
     def publish_map(self):
         flat_points = []
         flat_colors = []
-        for idx in range(len(self.localizer.poses)):
+        for idx in range(len(self.localizer.views_poses)):
             print("Pos=", idx)
-            points = slam_utils.create_view(self.localizer.poses[idx], self.localizer.scans[idx])
+            points = slam_utils.create_view(self.localizer.views_poses[idx], self.localizer.views_scans[idx])
             for point in points:
                 flat_points.append(point)
                 flat_colors.append(self.colors[idx])
@@ -236,7 +236,7 @@ i in range(100)]
 
     def process_lidar(self, lidar_msg, tf_base_laser_to_odom, tf_odom_to_base_laser):
         scan = skimage.transform.resize(np.array(lidar_msg.ranges).astype(np.float32), (360,))
-        self.localizer.update_scan(scan)
+        self.localizer.update_from_lidar(scan)
         current_odom_pose = self.ros2_to_pose(tf_odom_to_base_laser)
         if self.init_wait == 10:
             self.init_wait += 1
