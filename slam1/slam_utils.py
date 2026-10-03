@@ -95,10 +95,14 @@ def pred(scan, scan_pose, query_pose):
     return ranges
 
 
-def laser_probs(predictions, scan):
+def logprob_range_predictions(predictions, scan):
     num_particles = predictions.shape[0]     
     probs = np.zeros([num_particles])
+    z_hit, z_rand = .99, .01
+    log_z_hit, log_z_rand = np.log(z_hit), np.log(z_rand)
     for p in range(num_particles):
-        probs[p] = np.nanmean(norm.logpdf(scan, loc=predictions[p], scale=0.1))
-    return probs/1000
+        hit_prediction = norm.logpdf(scan, loc=predictions[p], scale=0.1)
+        tot = np.nan_to_num(hit_prediction, nan=log_z_rand)
+        probs[p] = np.sum(tot)
+    return probs
 

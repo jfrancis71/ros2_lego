@@ -37,7 +37,7 @@ class Localizer:
         particles[:self.num_particles] = self.particles
         particles[self.num_particles:] = self.generate_interior_particles(kidnap_particles_num)
         predictions = self.lidar_range_predictions(particles)
-        logprobs_particles = slam_utils.laser_probs(predictions, scan)*100
+        logprobs_particles = slam_utils.logprob_range_predictions(predictions, scan)/3600
         # We remove exterior as our random odometry may have put us outside
         self.remove_exterior(logprobs_particles, scan)
         probs = np.exp(logprobs_particles)
