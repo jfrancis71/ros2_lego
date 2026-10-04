@@ -22,6 +22,19 @@ from tf_transformations import euler_from_quaternion, quaternion_from_euler
 import slam_utils
 
 
+
+
+def trobot_frame_odom(previous_odom_pose, current_odom_pose):
+    diff_x = current_odom_pose[0] - previous_odom_pose[0]
+    diff_y = current_odom_pose[1] - previous_odom_pose[1]
+    forward = diff_x * np.cos(previous_odom_pose[2]) + diff_y * np.sin(previous_odom_pose[2])
+    slip = diff_x * np.cos(previous_odom_pose[2] + np.pi/2) + diff_y * np.sin(previous_odom_pose[2] + np.pi/2)
+    diff_angle = slam_utils.angle_diff(current_odom_pose[2], previous_odom_pose[2])
+    d_rot = current_odom_pose[2] - previous_odom_pose[2]
+    print("forward=", forward, " slip=", slip, d_rot)
+    return forward, slip, d_rot
+
+
 class Localizer:
     def __init__(self, filename):
         self.num_particles = 2000
@@ -30,14 +43,13 @@ class Localizer:
         self.views_scans = data["scans"]
         self.particles = self.generate_interior_particles(self.num_particles)
 
-    def update_from_lidar(self, scan):
-        self.particles += np.random.normal(size=[self.num_particles, 3])*.1  # Should really be part of odometry
+    def update_from_lidar(self, scan, magic_corr):
         kidnap_particles_num = int(self.num_particles*.1)
         particles = np.zeros([self.num_particles + kidnap_particles_num, 3])
         particles[:self.num_particles] = self.particles
         particles[self.num_particles:] = self.generate_interior_particles(kidnap_particles_num)
         predictions = self.lidar_range_predictions(particles)
-        logprobs_particles = slam_utils.logprob_range_predictions(predictions, scan)/3600
+        logprobs_particles = slam_utils.logprob_range_predictions(predictions, scan)/magic_corr
         # We remove exterior as our random odometry may have put us outside
         self.remove_exterior(logprobs_particles, scan)
         probs = np.exp(logprobs_particles)
@@ -237,15 +249,23 @@ i in range(100)]
 
     def process_lidar(self, lidar_msg, tf_base_laser_to_odom, tf_odom_to_base_laser):
         scan = skimage.transform.resize(np.array(lidar_msg.ranges).astype(np.float32), (360,))
-        self.localizer.update_from_lidar(scan)
         current_odom_pose = self.ros2_to_pose(tf_odom_to_base_laser)
-        if self.init_wait == 10:
+        if self.init_wait < 20:
             self.init_wait += 1
+            self.localizer.particles += np.random.normal(size=[self.localizer.num_particles, 3])*.1
+            self.localizer.update_from_lidar(scan, 3600)
+            pose = self.localizer.expected_pose()
+            print("pose init=", pose)
+            self.publish_particles(pose)
+            self.publish_map_odom_transform(tf_base_laser_to_odom, pose)
+            self.previous_odom_pose = current_odom_pose
             return
         if self.previous_odom_pose is None:
             self.previous_odom_pose = current_odom_pose
-        if self.robot_moved(current_odom_pose) or 1==1:
-            print("ORO")
+        if self.robot_moved(current_odom_pose):
+            odom = trobot_frame_odom(self.previous_odom_pose, current_odom_pose)
+            self.localizer.particles = slam_utils.sample_motion_model_odometry(self.localizer.particles, odom)
+            self.localizer.update_from_lidar(scan, 360)
             robot_frame_odom = self.robot_frame_odom(self.previous_odom_pose, current_odom_pose)
             pose = self.localizer.expected_pose()
             print("pose=", pose)
