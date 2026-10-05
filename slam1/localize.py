@@ -17,7 +17,7 @@ from tf2_ros.buffer import Buffer
 # clone git clone https://github.com/ros2/geometry2.git
 # Prepend ./src/geometry2/tf2_ros_py/tf2_ros to PYTHONPATH and export
 from static_transform_broadcaster import StaticTransformBroadcaster
-from tf2_ros import TransformException
+from tf2_ros import TransformException, LookupException, ExtrapolationException
 from tf_transformations import euler_from_quaternion, quaternion_from_euler
 import slam_utils
 
@@ -42,6 +42,7 @@ class Localizer:
         self.views_poses = data["poses"]
         self.views_scans = data["scans"]
         self.particles = self.generate_interior_particles(self.num_particles)
+        self.best_match = -100000.0
 
     def update_from_lidar(self, scan, magic_corr):
         kidnap_particles_num = int(self.num_particles*.1)
@@ -49,13 +50,20 @@ class Localizer:
         particles[:self.num_particles] = self.particles
         particles[self.num_particles:] = self.generate_interior_particles(kidnap_particles_num)
         predictions = self.lidar_range_predictions(particles)
-        logprobs_particles = slam_utils.logprob_range_predictions(predictions, scan)/magic_corr
+        logprobs_particles = slam_utils.logprob_range_predictions(predictions, scan)
+        self.best_match = logprobs_particles.max()
+        print("MAX PROB=", self.best_match)
         # We remove exterior as our random odometry may have put us outside
         self.remove_exterior(logprobs_particles, scan)
-        probs = np.exp(logprobs_particles)
-        print("MAX PROB=", probs.max())
+        probs = np.exp(logprobs_particles/magic_corr)
         norm_probs = probs/probs.sum()
         self.particles = self.resample_particles(particles, norm_probs, self.num_particles)
+
+    def lost(self):
+        if self.best_match < -700:
+            return True
+        else:
+            return False
 
     def generate_interior_particles(self, num_particles):
         particles = []
@@ -172,7 +180,6 @@ i in range(100)]
         flat_points = []
         flat_colors = []
         for idx in range(len(self.localizer.views_poses)):
-            print("Pos=", idx)
             points = slam_utils.create_view(self.localizer.views_poses[idx], self.localizer.views_scans[idx])
             for point in points:
                 flat_points.append(point)
@@ -222,15 +229,13 @@ i in range(100)]
         return np.abs(diff_angle) > self.min_angle or d_trans > self.min_dist
 
     def lidar_callback(self, lidar_msg):
+        # Filters lidar msg so only those with a valid base_laser <-> odom
+        # transform are passed on to process_lidar
         self.publish_map()
         print("R")
-        if self.init_wait < 10:
-            self.init_wait += 1
-            return
         if self.current_lidar_msg is None:
             self.current_lidar_msg = lidar_msg
             return
-        print("T")
         lidar_msg_time = Time.from_msg(self.current_lidar_msg.header.stamp)
         try:
             tf_base_laser_to_odom = self.tf_buffer.lookup_transform(
@@ -241,17 +246,23 @@ i in range(100)]
                 "odom",
                 "base_laser",
                 lidar_msg_time)
-        except TransformException as ex:  # This is common and normal.
+        except LookupException as ex:
             return
-        print("HE")
+        except ExtrapolationException as ex:  # This is common and normal.
+            # if our lidar_msg is before any transform, we will never be able to
+            # transform it
+            if "past" in str(ex):
+                self.current_lidar_msg = None
+                return
+            return
         self.process_lidar(self.current_lidar_msg, tf_base_laser_to_odom, tf_odom_to_base_laser)
         self.current_lidar_msg = None
 
     def process_lidar(self, lidar_msg, tf_base_laser_to_odom, tf_odom_to_base_laser):
         scan = skimage.transform.resize(np.array(lidar_msg.ranges).astype(np.float32), (360,))
         current_odom_pose = self.ros2_to_pose(tf_odom_to_base_laser)
-        if self.init_wait < 20:
-            self.init_wait += 1
+        print("S=", self.localizer.best_match)
+        if self.localizer.lost():
             self.localizer.particles += np.random.normal(size=[self.localizer.num_particles, 3])*.1
             self.localizer.update_from_lidar(scan, 3600)
             pose = self.localizer.expected_pose()
