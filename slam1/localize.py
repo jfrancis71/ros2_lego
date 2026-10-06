@@ -65,6 +65,9 @@ class Localizer:
         else:
             return False
 
+    def set_pose(self, x, y, angle):
+        self.particles = np.zeros([self.num_particles, 3]) + np.array([x, y, angle])
+
     def generate_interior_particles(self, num_particles):
         particles = []
         while len(particles) < num_particles:
@@ -136,6 +139,11 @@ class LocalizerNode(Node):
             "/scan",
             self.lidar_callback,
             1)
+        self.initialpose_subscription = self.create_subscription(
+            PoseWithCovarianceStamped,
+            "/initialpose",
+            self.initialpose_callback,
+            1)
         self.view_publisher = self.create_publisher(Marker, '/view_marker', 1)
         self.particles_publisher = self.create_publisher(Marker, '/particles', 1)
         self.view_publisher.publish(Marker())
@@ -157,6 +165,26 @@ qos=qos)
 i in range(100)]
         self.tf_static_broadcaster = StaticTransformBroadcaster(self)
         self.publish_map()
+        self.initial_pose_received = False
+
+    def initialpose_callback(self, initialpose_msg):
+        try:
+            tf_base_link_to_base_laser = self.tf_buffer.lookup_transform(
+                "base_link",
+                "base_laser",
+                Time())
+        except TransformException as ex:
+            warn_msg = "No Transform for base_link to base_laser. Initial pose not set."
+            self.get_logger().warn(warn_msg)
+            return
+        self.initial_pose_received = True
+        r_t = initialpose_msg.pose.pose.orientation
+        rot = [r_t.x, r_t.y, r_t.z, r_t.w]
+        _, _, theta_laser = euler_from_quaternion(rot)
+        # I am assuming here that laser and base_link just differ by orientation
+        _, _, theta_diff = self.ros2_to_pose(tf_base_link_to_base_laser)
+        self.localizer.set_pose(initialpose_msg.pose.pose.position.x, initialpose_msg.pose.pose.position.y, theta_laser + theta_diff)
+        self.get_logger().info("Initial pose set.")
 
     def publish_particles(self, pose):
         marker = Marker()
@@ -258,10 +286,12 @@ i in range(100)]
         self.current_lidar_msg = None
 
     def process_lidar(self, lidar_msg, tf_base_laser_to_odom, tf_odom_to_base_laser):
+        if not(self.initial_pose_received):
+            return
         scan = skimage.transform.resize(np.array(lidar_msg.ranges).astype(np.float32), (360,))
         current_odom_pose = self.ros2_to_pose(tf_odom_to_base_laser)
         print("S=", self.localizer.best_match)
-        if self.localizer.lost():
+        if self.localizer.lost() and False: # tmp disable
             self.localizer.particles += np.random.normal(size=[self.localizer.num_particles, 3])*.05
             self.localizer.update_from_lidar(scan, 1500)
             pose = self.localizer.expected_pose()
@@ -275,7 +305,7 @@ i in range(100)]
         if self.robot_moved(current_odom_pose):
             odom = trobot_frame_odom(self.previous_odom_pose, current_odom_pose)
             self.localizer.particles = slam_utils.sample_motion_model_odometry(self.localizer.particles, odom)
-            self.localizer.update_from_lidar(scan, 360)
+            self.localizer.update_from_lidar(scan, 3600)
             robot_frame_odom = self.robot_frame_odom(self.previous_odom_pose, current_odom_pose)
             pose = self.localizer.expected_pose()
             print("pose=", pose)
