@@ -60,7 +60,7 @@ class Localizer:
         self.particles = self.resample_particles(particles, norm_probs, self.num_particles)
 
     def lost(self):
-        if self.best_match < -700:
+        if self.best_match < -900:
             return True
         else:
             return False
@@ -232,7 +232,6 @@ i in range(100)]
         # Filters lidar msg so only those with a valid base_laser <-> odom
         # transform are passed on to process_lidar
         self.publish_map()
-        print("R")
         if self.current_lidar_msg is None:
             self.current_lidar_msg = lidar_msg
             return
@@ -263,10 +262,10 @@ i in range(100)]
         current_odom_pose = self.ros2_to_pose(tf_odom_to_base_laser)
         print("S=", self.localizer.best_match)
         if self.localizer.lost():
-            self.localizer.particles += np.random.normal(size=[self.localizer.num_particles, 3])*.1
-            self.localizer.update_from_lidar(scan, 3600)
+            self.localizer.particles += np.random.normal(size=[self.localizer.num_particles, 3])*.05
+            self.localizer.update_from_lidar(scan, 1500)
             pose = self.localizer.expected_pose()
-            print("pose init=", pose)
+            print("LOST")
             self.publish_particles(pose)
             self.publish_map_odom_transform(tf_base_laser_to_odom, pose)
             self.previous_odom_pose = current_odom_pose
