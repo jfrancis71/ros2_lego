@@ -60,6 +60,9 @@ class Localizer:
         self.particles = self.resample_particles(particles, norm_probs, self.num_particles)
 
     def lost(self):
+        x_std, y_std, _ = np.std(self.particles, axis=0)
+        if x_std > .2 or y_std > .2:
+            return True
         if self.best_match < -900:
             return True
         else:
@@ -286,8 +289,8 @@ i in range(100)]
         self.current_lidar_msg = None
 
     def process_lidar(self, lidar_msg, tf_base_laser_to_odom, tf_odom_to_base_laser):
-        if not(self.initial_pose_received):
-            return
+#        if not(self.initial_pose_received):
+#            return
         scan = skimage.transform.resize(np.array(lidar_msg.ranges).astype(np.float32), (360,))
         current_odom_pose = self.ros2_to_pose(tf_odom_to_base_laser)
         print("S=", self.localizer.best_match)
@@ -302,7 +305,9 @@ i in range(100)]
             return
         if self.previous_odom_pose is None:
             self.previous_odom_pose = current_odom_pose
-        if self.robot_moved(current_odom_pose):
+        if self.robot_moved(current_odom_pose) or self.localizer.lost():
+            if self.localizer.lost():
+                self.localizer.particles += np.random.normal(size=[self.localizer.num_particles, 3])*.05
             odom = trobot_frame_odom(self.previous_odom_pose, current_odom_pose)
             self.localizer.particles = slam_utils.sample_motion_model_odometry(self.localizer.particles, odom)
             self.localizer.update_from_lidar(scan, 3600)
