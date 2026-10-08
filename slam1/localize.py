@@ -81,7 +81,7 @@ class Localizer:
             sample_range = np.random.uniform(low=0, high=self.views_scans[view][angle])
             xp = sample_range * np.cos(self.views_poses[view][2] + np.pi * 2*angle/360) + self.views_poses[view][0]
             yp = sample_range * np.sin(self.views_poses[view][2] + np.pi * 2*angle/360) + self.views_poses[view][1]
-            sample_orientation = np.random.uniform(0, 360)
+            sample_orientation = np.random.uniform(0, 2*np.pi)
             particles.append(np.array([xp, yp, sample_orientation]))
         return np.array(particles)
 
@@ -310,7 +310,10 @@ i in range(100)]
                 self.localizer.particles += np.random.normal(size=[self.localizer.num_particles, 3])*.05
             odom = trobot_frame_odom(self.previous_odom_pose, current_odom_pose)
             self.localizer.particles = slam_utils.sample_motion_model_odometry(self.localizer.particles, odom)
-            self.localizer.update_from_lidar(scan, 3600)
+            if self.localizer.lost():
+                self.localizer.update_from_lidar(scan, 7200)
+            else:
+                self.localizer.update_from_lidar(scan, 3600)
             robot_frame_odom = self.robot_frame_odom(self.previous_odom_pose, current_odom_pose)
             pose = self.localizer.expected_pose()
             print("pose=", pose)
