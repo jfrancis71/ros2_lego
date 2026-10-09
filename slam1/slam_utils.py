@@ -1,8 +1,9 @@
 import numpy as np
-from scipy.stats import norm
+from scipy.stats import norm, uniform
 from visualization_msgs.msg import Marker
 from geometry_msgs.msg import Point
 from std_msgs.msg import ColorRGBA
+import scipy
 
 
 def angle_diff(angle_1, angle_2):
@@ -101,8 +102,10 @@ def logprob_range_predictions(predictions, scan):
     z_hit, z_rand = .99, .01
     log_z_hit, log_z_rand = np.log(z_hit), np.log(z_rand)
     for p in range(num_particles):
-        hit_prediction = norm.logpdf(scan, loc=predictions[p], scale=0.1)
-        tot = np.nan_to_num(hit_prediction, nan=log_z_rand)
+        hit_prediction = norm.logpdf(scan, loc=predictions[p], scale=0.1) + log_z_hit
+        rand_prediction = uniform.logpdf(scan, loc=np.zeros_like(predictions[p]), scale=25.0) + log_z_rand
+        log_density = scipy.special.logsumexp(np.stack([hit_prediction, rand_prediction]), axis=0)
+        tot = np.nan_to_num(log_density, nan=0.0)
         probs[p] = np.sum(tot)
     return probs
 
