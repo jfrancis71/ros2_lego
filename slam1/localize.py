@@ -6,7 +6,7 @@ from scipy.spatial.transform import Rotation as R
 import rclpy
 from rclpy.node import Node
 from rclpy.time import Time
-from visualization_msgs.msg import Marker
+from visualization_msgs.msg import Marker, MarkerArray
 from geometry_msgs.msg import Point, TransformStamped, PoseWithCovarianceStamped
 from rclpy.qos import QoSProfile, DurabilityPolicy, HistoryPolicy
 from sensor_msgs.msg import LaserScan
@@ -71,6 +71,7 @@ class Localizer:
 
     def set_pose(self, x, y, angle):
         self.particles = np.zeros([self.num_particles, 3]) + np.array([x, y, angle])
+        self.best_match = -10000
 
     def generate_interior_particles(self, num_particles):
         particles = []
@@ -152,8 +153,7 @@ class LocalizerNode(Node):
         self.particles_publisher = self.create_publisher(Marker, '/particles', 1)
         self.pred_publisher = \
             self.create_publisher(LaserScan, "/pred_laser", 1)
-        self.closest_view_publisher = self.create_publisher(Marker, '/closest_view_marker', 1)
-        self.view_publisher.publish(Marker())
+        self.closest_view_publisher = self.create_publisher(MarkerArray, '/closest_view_marker', 1)
         self.tf_buffer = Buffer()
         qos = QoSProfile(
             depth=100,
@@ -257,21 +257,40 @@ i in range(100)]
 
 
     def publish_closest_view_marker(self, closest_view):
+        markers = MarkerArray()
+        for i in range(len(self.localizer.views_poses)):
+            pose = self.localizer.views_poses[i]
+            marker = Marker()
+            marker.header.stamp = self.get_clock().now().to_msg()
+            marker.header.frame_id = "map"
+            marker.ns = "0"
+            marker.id = i
+            marker.type = Marker.CYLINDER
+            marker.action = Marker.ADD
+            marker.pose.position.x, marker.pose.position.y, marker.pose.position.z = pose[0], pose[1] , 0.0
+            marker.pose.orientation.x, marker.pose.orientation.y, marker.pose.orientation.z = 0.0, 0.0, 0.0
+            marker.color.r, marker.color.g, marker.color.b, marker.color.a = self.colors[i]
+            marker.pose.orientation.w = 1.0
+            marker.scale.x, marker.scale.y, marker.scale.z = 0.2, 0.2, 0.05
+            marker.frame_locked = True
+            markers.markers.append(marker)
+
         pose = self.localizer.views_poses[closest_view]
         marker = Marker()
         marker.header.stamp = self.get_clock().now().to_msg()
         marker.header.frame_id = "map"
         marker.ns = "0"
-        marker.id = 0
-        marker.type = Marker.CYLINDER
+        marker.id = len(self.localizer.views_poses)
+        marker.type = Marker.CUBE
         marker.action = Marker.ADD
         marker.pose.position.x, marker.pose.position.y, marker.pose.position.z = pose[0], pose[1] , 0.0
         marker.pose.orientation.x, marker.pose.orientation.y, marker.pose.orientation.z = 0.0, 0.0, 0.0
-        marker.color.r, marker.color.g, marker.color.b, marker.color.a = 0.3, 0.0, 1.0, 1.0
+        marker.color.r, marker.color.g, marker.color.b, marker.color.a = self.colors[closest_view]
         marker.pose.orientation.w = 1.0
         marker.scale.x, marker.scale.y, marker.scale.z = 0.2, 0.2, 0.05
         marker.frame_locked = True
-        self.closest_view_publisher.publish(marker)
+        markers.markers.append(marker)
+        self.closest_view_publisher.publish(markers)
 
     def robot_frame_odom(self, previous_odom_pose, current_odom_pose):
         diff_x = current_odom_pose[0] - previous_odom_pose[0]
