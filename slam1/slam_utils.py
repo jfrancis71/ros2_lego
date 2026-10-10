@@ -4,6 +4,7 @@ from visualization_msgs.msg import Marker
 from geometry_msgs.msg import Point
 from std_msgs.msg import ColorRGBA
 import scipy
+from numba import jit
 
 
 def angle_diff(angle_1, angle_2):
@@ -70,6 +71,17 @@ def sample_motion_model_odometry(last_particles, robot_frame_odom):
 #        particles[:, 2] = last_particles[:, 2] + sp3*.2
     return particles
 
+@jit
+def hidden_point_removal(idx, ranges, THETA, R):
+    for a in range(360):
+        if np.isnan(THETA[a]):
+            continue
+        if np.isnan(ranges[idx[a]]):
+            ranges[idx[a]] = R[a]
+        else:
+            if R[a] < ranges[idx[a]]:
+                ranges[idx[a]] = R[a]
+
 
 # Computes range predictions from a view pose to a query pose
 def pred(scan, scan_pose, query_pose):
@@ -84,15 +96,8 @@ def pred(scan, scan_pose, query_pose):
     Y = -xp * np.sin(na) + yp * np.cos(na)
     R = np.sqrt(X*X + Y*Y)
     THETA = np.arctan2(Y, X)
-    for a in range(360):
-        if np.isnan(THETA[a]):
-            continue
-        idx = int(THETA[a]*360/(2*np.pi)) % 360
-        if np.isnan(ranges[idx]):
-            ranges[idx] = R[a]
-        else:
-            if R[a] < ranges[idx]:
-                ranges[idx] = R[a]
+    idx = (THETA*360/(2*np.pi)).astype(np.int32) % 360
+    hidden_point_removal(idx, ranges, THETA, R)
     return ranges
 
 def logprob_range_predictions(predictions, scan):
@@ -102,5 +107,4 @@ def logprob_range_predictions(predictions, scan):
     rand_prediction = uniform.logpdf(scan, loc=np.zeros_like(predictions), scale=25.0) + log_z_rand
     log_density = scipy.special.logsumexp(np.stack([hit_prediction, rand_prediction]), axis=0)
     tot = np.nan_to_num(log_density, nan=0.0)
-    probs = np.sum(tot, axis=1)
-    return probs
+    return tot

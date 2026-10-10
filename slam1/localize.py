@@ -52,7 +52,7 @@ class Localizer:
         particles[:self.num_particles] = self.particles
         particles[self.num_particles:] = self.generate_interior_particles(kidnap_particles_num)
         predictions = self.lidar_range_predictions(particles)
-        logprobs_particles = slam_utils.logprob_range_predictions(predictions, scan)
+        logprobs_particles = slam_utils.logprob_range_predictions(predictions, scan).sum(axis=1)
         self.best_match = logprobs_particles.max()
         # We remove exterior as our random odometry may have put us outside
         self.remove_exterior(logprobs_particles, scan)
@@ -153,6 +153,8 @@ class LocalizerNode(Node):
         self.particles_publisher = self.create_publisher(Marker, '/particles', 1)
         self.pred_publisher = \
             self.create_publisher(LaserScan, "/pred_laser", 1)
+        self.logprobs_publisher = \
+            self.create_publisher(LaserScan, "/logprobs", 1)
         self.closest_view_publisher = self.create_publisher(MarkerArray, '/closest_view_marker', 1)
         self.tf_buffer = Buffer()
         qos = QoSProfile(
@@ -237,6 +239,12 @@ i in range(100)]
         lidar_msg.ranges = ranges
         lidar_msg.header.stamp = self.current_lidar_msg.header.stamp
         self.pred_publisher.publish(lidar_msg)
+
+    def publish_logprobs(self, logprobs):
+        lidar_msg = copy.deepcopy(self.template_lidar_msg)
+        lidar_msg.ranges = np.tanh(logprobs) + 2.0
+        lidar_msg.header.stamp = self.current_lidar_msg.header.stamp
+        self.logprobs_publisher.publish(lidar_msg)
 
     def publish_map_odom_transform(self, tf_base_laser_to_odom, pose):
         tf_zero_to_odom = TransformStamped()
@@ -380,6 +388,8 @@ i in range(100)]
             self.publish_map_odom_transform(tf_base_laser_to_odom, pose)
             self.previous_odom_pose = current_odom_pose
             ranges = self.localizer.lidar_range_predictions(self.localizer.particles[:1])
+            logprobs = slam_utils.logprob_range_predictions(ranges, scan)
+            self.publish_logprobs(logprobs[0])
             closest_view = self.localizer.find_closest_view(self.localizer.particles[0])
             self.publish_closest_view_marker(closest_view)
             self.publish_lidar_prediction(ranges[0])
