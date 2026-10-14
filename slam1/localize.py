@@ -53,9 +53,9 @@ class Localizer:
         particles[self.num_particles:] = self.generate_interior_particles(kidnap_particles_num)
         predictions = self.lidar_range_predictions(particles)
         logprobs_particles = slam_utils.logprob_range_predictions(predictions, scan).sum(axis=1)
-        self.best_match = logprobs_particles.max()
         # We remove exterior as our random odometry may have put us outside
-        self.remove_exterior(logprobs_particles, scan)
+#        self.remove_exterior(logprobs_particles, scan)
+        self.best_match = logprobs_particles.max()
         probs = np.exp(logprobs_particles/magic_corr)
         norm_probs = probs/probs.sum()
         self.particles = self.resample_particles(particles, norm_probs, self.num_particles)
@@ -88,10 +88,14 @@ class Localizer:
         return np.array(particles)
 
     def remove_exterior(self, logprobs_particles, scan):
+        a = 0
         for p in range(self.num_particles):
             idx = self.find_closest_view(self.particles[p])
-            if not self.is_interior(scan, self.views_poses[idx], self.particles[p]):
+            if not self.is_interior(self.views_scans[idx], self.views_poses[idx], self.particles[p]):
                 logprobs_particles[p] = -10000
+                print("REMOVING ", p, self.views_poses[idx], self.particles[p])
+                a += 1
+        print("REMOVE EXT", a)
 
     def lidar_range_predictions(self, particles):
         num_particles = particles.shape[0]
@@ -116,10 +120,12 @@ class Localizer:
         angle = np.arctan2(yp, xp)
         R = np.sqrt(xp*xp + yp*yp)
         rolled_scan = np.roll(scan, int((-scan_pose[2]+np.pi/2)*360/(2*np.pi)))
+        if np.isnan(rolled_scan[int(angle)]):
+            print("rolled_scan is np.nan")
         if rolled_scan[int(angle)] > R:
-            return True
-        else:
             return False
+        else:
+            return True
 
     def resample_particles(self, particles, probs, num_resampled_particles):
         num_particles = particles.shape[0]
@@ -376,14 +382,15 @@ i in range(100)]
 #                 None
             odom = trobot_frame_odom(self.previous_odom_pose, current_odom_pose)
             self.localizer.particles = slam_utils.sample_motion_model_odometry(self.localizer.particles, odom)
+            print("BEFORE ", " num uniq particles=", np.unique(self.localizer.particles, axis=0).shape[0])
             if self.localizer.lost():
                 print("LOST")
-                self.localizer.update_from_lidar(scan, 100)
+                self.localizer.update_from_lidar(scan, 50)
             else:
                 self.localizer.update_from_lidar(scan, 50)
             robot_frame_odom = self.robot_frame_odom(self.previous_odom_pose, current_odom_pose)
             pose = self.localizer.expected_pose()
-            print("pose=", pose)
+            print("AFTER pose=", pose, " num uniq particles=", np.unique(self.localizer.particles, axis=0).shape[0])
             self.publish_particles(pose)
             self.publish_map_odom_transform(tf_base_laser_to_odom, pose)
             self.previous_odom_pose = current_odom_pose
