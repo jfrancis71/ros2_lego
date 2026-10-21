@@ -23,9 +23,7 @@ import slam_utils
 import copy
 
 
-
-
-def trobot_frame_odom(previous_odom_pose, current_odom_pose):
+def robot_frame_odom(previous_odom_pose, current_odom_pose):
     diff_x = current_odom_pose[0] - previous_odom_pose[0]
     diff_y = current_odom_pose[1] - previous_odom_pose[1]
     forward = diff_x * np.cos(previous_odom_pose[2]) + diff_y * np.sin(previous_odom_pose[2])
@@ -44,7 +42,39 @@ class Localizer:
         self.views_scans = data["scans"]
         self.particles = self.generate_interior_particles(self.num_particles)
         self.best_match = -100000.0
+        self.min_dist = 0.03  # minimum distance for lidar update
+        self.min_angle = .08  # minimum angle change for lidar update
+        self.previous_odom_pose = None
         print("POSES=", self.views_poses)
+
+    def set_pose(self, x, y, angle):
+        self.particles = np.zeros([self.num_particles, 3]) + np.array([x, y, angle])
+        self.best_match = -10000
+        self.previous_odom_pose = None
+
+    def update(self, scan_odom_pose, scan):
+        if self.previous_odom_pose is None:
+            self.previous_odom_pose = scan_odom_pose
+            return
+        if self.robot_moved(scan_odom_pose) or self.lost():
+            odom = robot_frame_odom(self.previous_odom_pose, scan_odom_pose)
+            self.particles = slam_utils.sample_motion_model_odometry(self.particles, odom)
+            print("BEFORE ", " num uniq particles=", np.unique(self.particles, axis=0).shape[0])
+            if self.lost():
+                self.particles += np.random.normal(size=[self.num_particles, 3])*.05
+            self.update_from_lidar(scan, 50)
+            pose = self.expected_pose()
+            print("AFTER pose=", pose, " num uniq particles=", np.unique(self.particles, axis=0).shape[0])
+            self.previous_odom_pose = scan_odom_pose
+            return pose
+        return None
+
+    def robot_moved(self, current_odom_pose):
+        diff_x = current_odom_pose[0] - self.previous_odom_pose[0]
+        diff_y = current_odom_pose[1] - self.previous_odom_pose[1]
+        d_trans = np.sqrt(diff_y**2 + diff_x**2)
+        diff_angle = slam_utils.angle_diff(current_odom_pose[2], self.previous_odom_pose[2])
+        return np.abs(diff_angle) > self.min_angle or d_trans > self.min_dist
 
     def update_from_lidar(self, scan, magic_corr):
         kidnap_particles_num = int(self.num_particles*.1)
@@ -68,10 +98,6 @@ class Localizer:
             return True
         else:
             return False
-
-    def set_pose(self, x, y, angle):
-        self.particles = np.zeros([self.num_particles, 3]) + np.array([x, y, angle])
-        self.best_match = -10000
 
     def generate_interior_particles(self, num_particles):
         particles = []
@@ -140,58 +166,68 @@ class Localizer:
         return x_mean, y_mean, angle
 
 
-class LocalizerNode(Node):
-    def __init__(self):
-        super().__init__("localizer_node")
-        self.min_dist = 0.03  # minimum distance for lidar update
-        self.min_angle = .08  # minimum angle change for lidar update
-        self.lidar_subscription = self.create_subscription(
-            LaserScan,
-            "/scan",
-            self.lidar_callback,
-            1)
-        self.initialpose_subscription = self.create_subscription(
-            PoseWithCovarianceStamped,
-            "/initialpose",
-            self.initialpose_callback,
-            1)
-        self.view_publisher = self.create_publisher(Marker, '/view_marker', 1)
-        self.particles_publisher = self.create_publisher(Marker, '/particles', 1)
-        self.pred_publisher = \
-            self.create_publisher(LaserScan, "/pred_laser", 1)
-        self.logprobs_publisher = \
-            self.create_publisher(LaserScan, "/logprobs", 1)
-        self.closest_view_publisher = self.create_publisher(MarkerArray, '/closest_view_marker', 1)
+class TransformMessageFilter(Node):
+    def __init__(self, localizer):
+        super().__init__("transform_filter_node")
+        self.localizer_fn = localizer
         self.tf_buffer = Buffer()
         qos = QoSProfile(
             depth=100,
             durability=DurabilityPolicy.VOLATILE,
             history=HistoryPolicy.KEEP_LAST,
             )
-        self.tf_listener = TransformListener(self.tf_buffer, self, spin_thread=True,
-qos=qos)
+        self.tf_listener = TransformListener(self.tf_buffer, self, spin_thread=True, qos=qos)
+        self.lidar_subscription = self.create_subscription(
+            LaserScan,
+            "/scan",
+            self.lidar_callback,
+            1)
         self.current_lidar_msg = None
-        self.previous_odom_pose = None
-        self.init_wait = 0
+
+    def lidar_callback(self, lidar_msg):
+        # Filters lidar msg so only those with a valid base_laser <-> odom
+        # transform are passed on to process_lidar
+        if self.current_lidar_msg is None:
+            self.current_lidar_msg = lidar_msg
+            return
+        lidar_msg_time = Time.from_msg(self.current_lidar_msg.header.stamp)
+        try:
+            tf_base_laser_to_odom = self.tf_buffer.lookup_transform(
+                "base_laser",
+                "odom",
+                lidar_msg_time)  # https://github.com/ros2/ros2_documentation/issues/4385
+            tf_odom_to_base_laser = self.tf_buffer.lookup_transform(
+                "odom",
+                "base_laser",
+                lidar_msg_time)
+        except LookupException as ex:
+            return
+        except ExtrapolationException as ex:  # This is common and normal.
+            # if our lidar_msg is before any transform, we will never be able to
+            # transform it
+            if "past" in str(ex):
+                self.current_lidar_msg = None
+                return
+            return
+        self.localizer_fn(self.current_lidar_msg, tf_base_laser_to_odom, tf_odom_to_base_laser)
+        self.current_lidar_msg = None
+
+
+class LocalizerNode(Node):
+    def __init__(self):
+        super().__init__("localizer_node")
+        self.min_dist = 0.03  # minimum distance for lidar update
+        self.min_angle = .08  # minimum angle change for lidar update
+        self.transform_filter = TransformMessageFilter(self.process_lidar)
+        self.initialpose_subscription = self.create_subscription(
+            PoseWithCovarianceStamped,
+            "/initialpose",
+            self.initialpose_callback,
+            1)
         self.declare_parameter('map_filename', 'map_odom.npz')
         map_filename = self.get_parameter('map_filename').get_parameter_value().string_value
         self.localizer = Localizer(map_filename)
-        self.colors = [ [random.random(), random.random(), random.random(), 1.0] for
-i in range(100)]
         self.tf_static_broadcaster = StaticTransformBroadcaster(self)
-        self.publish_map()
-        self.initial_pose_received = False
-        lidar_msg = LaserScan()
-        lidar_msg.angle_min = 0.0
-        lidar_msg.angle_max = 2 * np.pi
-        lidar_msg.angle_increment = 2 * np.pi / 360
-        lidar_msg.time_increment = 0.00019850002718158066
-        lidar_msg.scan_time = 0.10004401206970215
-        lidar_msg.range_min = 0.019999999552965164
-        lidar_msg.range_max = 25.0
-        lidar_msg.header.frame_id = "base_laser"
-        self.template_lidar_msg = lidar_msg
-
 
     def initialpose_callback(self, initialpose_msg):
         try:
@@ -203,7 +239,6 @@ i in range(100)]
             warn_msg = "No Transform for base_link to base_laser. Initial pose not set."
             self.get_logger().warn(warn_msg)
             return
-        self.initial_pose_received = True
         r_t = initialpose_msg.pose.pose.orientation
         rot = [r_t.x, r_t.y, r_t.z, r_t.w]
         _, _, theta_laser = euler_from_quaternion(rot)
@@ -212,9 +247,74 @@ i in range(100)]
         self.localizer.set_pose(initialpose_msg.pose.pose.position.x, initialpose_msg.pose.pose.position.y, theta_laser + theta_diff)
         self.get_logger().info("Initial pose set.")
 
-    def publish_particles(self, pose):
+    def publish_particles(self, pose, stamp):
+        pass
+
+    def publish_map(self):
+        pass
+
+    def publish_lidar_prediction(self, ranges, stamp):
+        pass
+
+    def publish_logprobs(self, logprobs, stamp):
+        pass
+
+    def publish_map_odom_transform(self, tf_base_laser_to_odom, pose, stamp):
+        pass
+
+    def publish_closest_view_marker(self, closest_view):
+        pass
+
+    def ros2_to_pose(self, odom_transform):
+        trans_tf = odom_transform.transform.translation
+        rot_tf = odom_transform.transform.rotation
+        rot = [rot_tf.x, rot_tf.y, rot_tf.z, rot_tf.w]
+        _, _, theta = euler_from_quaternion(rot)
+        return (trans_tf.x, trans_tf.y, theta)
+
+    def process_lidar(self, lidar_msg, tf_base_laser_to_odom, tf_odom_to_base_laser):
+        self.publish_map()
+        scan = skimage.transform.resize(np.array(lidar_msg.ranges).astype(np.float32), (360,))
+        current_odom_pose = self.ros2_to_pose(tf_odom_to_base_laser)
+        print("Max Log Prob=", self.localizer.best_match)
+        new_pose = self.localizer.update(current_odom_pose, scan)
+        if new_pose is not None:
+            self.publish_particles(new_pose, lidar_msg.header.stamp)
+            self.publish_map_odom_transform(tf_base_laser_to_odom, new_pose, lidar_msg.header.stamp)
+            ranges = self.localizer.lidar_range_predictions(self.localizer.particles[:1])
+            logprobs = slam_utils.logprob_range_predictions(ranges, scan)
+            self.publish_logprobs(logprobs[0], lidar_msg.header.stamp)
+            closest_view = self.localizer.find_closest_view(self.localizer.particles[0])
+            self.publish_closest_view_marker(closest_view)
+            self.publish_lidar_prediction(ranges[0], lidar_msg.header.stamp)
+
+
+class DebugLocalizerNode(LocalizerNode):
+    def __init__(self):
+        super().__init__()
+        self.view_publisher = self.create_publisher(Marker, '/view_marker', 1)
+        self.particles_publisher = self.create_publisher(Marker, '/particles', 1)
+        self.pred_publisher = \
+            self.create_publisher(LaserScan, "/pred_laser", 1)
+        self.logprobs_publisher = \
+            self.create_publisher(LaserScan, "/logprobs", 1)
+        self.closest_view_publisher = self.create_publisher(MarkerArray, '/closest_view_marker', 1)
+        self.colors = [ [random.random(), random.random(), random.random(), 1.0] for
+i in range(100)]
+        lidar_msg = LaserScan()
+        lidar_msg.angle_min = 0.0
+        lidar_msg.angle_max = 2 * np.pi
+        lidar_msg.angle_increment = 2 * np.pi / 360
+        lidar_msg.time_increment = 0.00019850002718158066
+        lidar_msg.scan_time = 0.10004401206970215
+        lidar_msg.range_min = 0.019999999552965164
+        lidar_msg.range_max = 25.0
+        lidar_msg.header.frame_id = "base_laser"
+        self.template_lidar_msg = lidar_msg
+
+    def publish_particles(self, pose, stamp):
         marker = Marker()
-        marker.header.stamp = self.current_lidar_msg.header.stamp
+        marker.header.stamp = stamp
         marker.header.frame_id = "base_laser"
         marker.ns = "basic_shapes"
         marker.id = 0
@@ -240,26 +340,26 @@ i in range(100)]
                 flat_colors.append(self.colors[idx])
         self.view_publisher.publish(slam_utils.publish_points(self.view_publisher, self.get_clock().now().to_msg(), flat_points, flat_colors))
 
-    def publish_lidar_prediction(self, ranges):
+    def publish_lidar_prediction(self, ranges, stamp):
         lidar_msg = copy.deepcopy(self.template_lidar_msg)
         lidar_msg.ranges = ranges
-        lidar_msg.header.stamp = self.current_lidar_msg.header.stamp
+        lidar_msg.header.stamp = stamp
         self.pred_publisher.publish(lidar_msg)
 
-    def publish_logprobs(self, logprobs):
+    def publish_logprobs(self, logprobs, stamp):
         lidar_msg = copy.deepcopy(self.template_lidar_msg)
         lidar_msg.ranges = np.tanh(logprobs) + 2.0
-        lidar_msg.header.stamp = self.current_lidar_msg.header.stamp
+        lidar_msg.header.stamp = stamp
         self.logprobs_publisher.publish(lidar_msg)
 
-    def publish_map_odom_transform(self, tf_base_laser_to_odom, pose):
+    def publish_map_odom_transform(self, tf_base_laser_to_odom, pose, stamp):
         tf_zero_to_odom = TransformStamped()
-        tf_zero_to_odom.header.stamp = self.current_lidar_msg.header.stamp
+        tf_zero_to_odom.header.stamp = stamp
         tf_zero_to_odom.header.frame_id = 'zero'
         tf_zero_to_odom.child_frame_id = 'odom'
         tf_zero_to_odom.transform = tf_base_laser_to_odom.transform
         tf_map_to_zero = TransformStamped()
-        tf_map_to_zero.header.stamp = self.current_lidar_msg.header.stamp
+        tf_map_to_zero.header.stamp = stamp
         tf_map_to_zero.header.frame_id = 'map'
         tf_map_to_zero.child_frame_id = 'zero'
         tf_m_to_z_trans = tf_map_to_zero.transform.translation
@@ -306,104 +406,9 @@ i in range(100)]
         markers.markers.append(marker)
         self.closest_view_publisher.publish(markers)
 
-    def robot_frame_odom(self, previous_odom_pose, current_odom_pose):
-        diff_x = current_odom_pose[0] - previous_odom_pose[0]
-        diff_y = current_odom_pose[1] - previous_odom_pose[1]
-        forward = diff_x * np.cos(previous_odom_pose[2]) + diff_y * np.sin(previous_odom_pose[2])
-        slip = diff_x * np.cos(previous_odom_pose[2] + np.pi/2) + diff_y * np.sin(previous_odom_pose[2] + np.pi/2)
-        diff_angle = slam_utils.angle_diff(current_odom_pose[2], previous_odom_pose[2])
-        d_rot = current_odom_pose[2] - previous_odom_pose[2]
-        print("forward=", forward, " slip=", slip, d_rot)
-        return forward, slip, d_rot
-
-    def ros2_to_pose(self, odom_transform):
-        trans_tf = odom_transform.transform.translation
-        rot_tf = odom_transform.transform.rotation
-        rot = [rot_tf.x, rot_tf.y, rot_tf.z, rot_tf.w]
-        _, _, theta = euler_from_quaternion(rot)
-        return (trans_tf.x, trans_tf.y, theta)
-
-    def robot_moved(self, current_odom_pose):
-        diff_x = current_odom_pose[0] - self.previous_odom_pose[0]
-        diff_y = current_odom_pose[1] - self.previous_odom_pose[1]
-        d_trans = np.sqrt(diff_y**2 + diff_x**2)
-        diff_angle = slam_utils.angle_diff(current_odom_pose[2], self.previous_odom_pose[2])
-        return np.abs(diff_angle) > self.min_angle or d_trans > self.min_dist
-
-    def lidar_callback(self, lidar_msg):
-        # Filters lidar msg so only those with a valid base_laser <-> odom
-        # transform are passed on to process_lidar
-        self.publish_map()
-        if self.current_lidar_msg is None:
-            self.current_lidar_msg = lidar_msg
-            return
-        lidar_msg_time = Time.from_msg(self.current_lidar_msg.header.stamp)
-        try:
-            tf_base_laser_to_odom = self.tf_buffer.lookup_transform(
-                "base_laser",
-                "odom",
-                lidar_msg_time)  # https://github.com/ros2/ros2_documentation/issues/4385
-            tf_odom_to_base_laser = self.tf_buffer.lookup_transform(
-                "odom",
-                "base_laser",
-                lidar_msg_time)
-        except LookupException as ex:
-            return
-        except ExtrapolationException as ex:  # This is common and normal.
-            # if our lidar_msg is before any transform, we will never be able to
-            # transform it
-            if "past" in str(ex):
-                self.current_lidar_msg = None
-                return
-            return
-        self.process_lidar(self.current_lidar_msg, tf_base_laser_to_odom, tf_odom_to_base_laser)
-        self.current_lidar_msg = None
-
-    def process_lidar(self, lidar_msg, tf_base_laser_to_odom, tf_odom_to_base_laser):
-#        if not(self.initial_pose_received):
-#            return
-        scan = skimage.transform.resize(np.array(lidar_msg.ranges).astype(np.float32), (360,))
-        current_odom_pose = self.ros2_to_pose(tf_odom_to_base_laser)
-        print("Max Log Prob=", self.localizer.best_match)
-        if self.localizer.lost() and False: # tmp disable
-            self.localizer.particles += np.random.normal(size=[self.localizer.num_particles, 3])*.05
-            self.localizer.update_from_lidar(scan, 1500)
-            pose = self.localizer.expected_pose()
-            print("LOST")
-            self.publish_particles(pose)
-            self.publish_map_odom_transform(tf_base_laser_to_odom, pose)
-            self.previous_odom_pose = current_odom_pose
-            return
-        if self.previous_odom_pose is None:
-            self.previous_odom_pose = current_odom_pose
-        if self.robot_moved(current_odom_pose) or self.localizer.lost():
-            if self.localizer.lost():
-                self.localizer.particles += np.random.normal(size=[self.localizer.num_particles, 3])*.05
-#                 None
-            odom = trobot_frame_odom(self.previous_odom_pose, current_odom_pose)
-            self.localizer.particles = slam_utils.sample_motion_model_odometry(self.localizer.particles, odom)
-            print("BEFORE ", " num uniq particles=", np.unique(self.localizer.particles, axis=0).shape[0])
-            if self.localizer.lost():
-                print("LOST")
-                self.localizer.update_from_lidar(scan, 50)
-            else:
-                self.localizer.update_from_lidar(scan, 50)
-            robot_frame_odom = self.robot_frame_odom(self.previous_odom_pose, current_odom_pose)
-            pose = self.localizer.expected_pose()
-            print("AFTER pose=", pose, " num uniq particles=", np.unique(self.localizer.particles, axis=0).shape[0])
-            self.publish_particles(pose)
-            self.publish_map_odom_transform(tf_base_laser_to_odom, pose)
-            self.previous_odom_pose = current_odom_pose
-            ranges = self.localizer.lidar_range_predictions(self.localizer.particles[:1])
-            logprobs = slam_utils.logprob_range_predictions(ranges, scan)
-            self.publish_logprobs(logprobs[0])
-            closest_view = self.localizer.find_closest_view(self.localizer.particles[0])
-            self.publish_closest_view_marker(closest_view)
-            self.publish_lidar_prediction(ranges[0])
-
 
 rclpy.init()
-localizer_node = LocalizerNode()
+localizer_node = DebugLocalizerNode()
 #localizer_node.publish_map()
 rclpy.spin(localizer_node)
 localizer_node.destroy_node()
