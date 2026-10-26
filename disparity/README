@@ -1,0 +1,6 @@
+Subscribes to Stereo Disparity Image and produces debug image showing some samples of image match.
+
+To Do:
+    Compute LaserScan type of message using the stereo disparity.
+    Why discrepancy between ROS2 DisparityImage and ROS2 Image, what is reason?
+    My FFS uses Image, stereo image proc uses DisparityImage
